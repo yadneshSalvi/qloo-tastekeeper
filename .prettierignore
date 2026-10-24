@@ -1,0 +1,13 @@
+plans/
+node_modules/
+.next/
+.artifacts/
+test-results/
+playwright-report/
+coverage/
+.env*
+pnpm-lock.yaml
+next-env.d.ts
+AGENTS.md
+LICENSE
+public/fonts/

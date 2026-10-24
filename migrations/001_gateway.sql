@@ -1,0 +1,53 @@
+BEGIN;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tastekeeper_runtime') THEN
+    CREATE ROLE tastekeeper_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE tenants (tenant_id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, demo boolean NOT NULL DEFAULT true CHECK (demo));
+CREATE TABLE users (tenant_id uuid NOT NULL REFERENCES tenants ON DELETE CASCADE, id uuid NOT NULL, role text NOT NULL CHECK (role IN ('owner','delegate')), display_name text NOT NULL, PRIMARY KEY (tenant_id,id));
+CREATE TABLE owner_sessions (token_hash text PRIMARY KEY, tenant_id uuid NOT NULL, owner_id uuid NOT NULL, expires_at timestamptz NOT NULL, FOREIGN KEY (tenant_id,owner_id) REFERENCES users ON DELETE CASCADE);
+CREATE TABLE clients (tenant_id uuid NOT NULL REFERENCES tenants ON DELETE CASCADE, id text NOT NULL CHECK (id IN ('books','media','places')), active boolean NOT NULL DEFAULT true, epoch integer NOT NULL DEFAULT 1 CHECK (epoch > 0), PRIMARY KEY (tenant_id,id));
+CREATE TABLE contexts (tenant_id uuid NOT NULL, id uuid NOT NULL, owner_id uuid NOT NULL, name text NOT NULL, purpose text NOT NULL CHECK (purpose IN ('gift','personal')), revision integer NOT NULL DEFAULT 1 CHECK (revision > 0), deleted boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,id), FOREIGN KEY (tenant_id,owner_id) REFERENCES users ON DELETE CASCADE);
+CREATE TABLE context_revisions (tenant_id uuid NOT NULL, context_id uuid NOT NULL, revision integer NOT NULL CHECK (revision > 0), encrypted_signals text NOT NULL, reason text NOT NULL, author_id uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,context_id,revision), FOREIGN KEY (tenant_id,context_id) REFERENCES contexts ON DELETE CASCADE, FOREIGN KEY (tenant_id,author_id) REFERENCES users);
+CREATE TABLE catalog_snapshots (tenant_id uuid NOT NULL, id uuid NOT NULL, client_id text NOT NULL, catalog_id text NOT NULL, target_type text NOT NULL CHECK (target_type IN ('book','movie','place')), payload jsonb NOT NULL, checksum text NOT NULL, version integer NOT NULL DEFAULT 1, retrieved_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,id), FOREIGN KEY (tenant_id,client_id) REFERENCES clients ON DELETE CASCADE);
+CREATE TABLE catalog_heads (tenant_id uuid NOT NULL, client_id text NOT NULL, catalog_id text NOT NULL, snapshot_id uuid NOT NULL, PRIMARY KEY (tenant_id,client_id,catalog_id), FOREIGN KEY (tenant_id,snapshot_id) REFERENCES catalog_snapshots, FOREIGN KEY (tenant_id,client_id) REFERENCES clients ON DELETE CASCADE);
+CREATE TABLE grants (tenant_id uuid NOT NULL, id uuid NOT NULL, owner_id uuid NOT NULL, delegate_id uuid, delegate_name text NOT NULL, client_id text NOT NULL, context_id uuid NOT NULL, version integer NOT NULL DEFAULT 1 CHECK (version > 0), status text NOT NULL CHECK (status IN ('pending','active','revoked')), expires_at timestamptz NOT NULL, request_limit integer NOT NULL CHECK (request_limit BETWEEN 1 AND 40), reserved_count integer NOT NULL DEFAULT 0 CHECK (reserved_count >= 0 AND reserved_count <= request_limit), created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,id), FOREIGN KEY (tenant_id,owner_id) REFERENCES users, FOREIGN KEY (tenant_id,delegate_id) REFERENCES users, FOREIGN KEY (tenant_id,client_id) REFERENCES clients, FOREIGN KEY (tenant_id,context_id) REFERENCES contexts ON DELETE CASCADE);
+CREATE TABLE grant_revisions (tenant_id uuid NOT NULL, grant_id uuid NOT NULL, version integer NOT NULL, scope jsonb NOT NULL, reason text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,grant_id,version), FOREIGN KEY (tenant_id,grant_id) REFERENCES grants ON DELETE CASCADE);
+CREATE TABLE invitations (tenant_id uuid NOT NULL, id uuid NOT NULL, grant_id uuid NOT NULL, token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL, claimed_at timestamptz, delegate_id uuid, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,id), FOREIGN KEY (tenant_id,grant_id) REFERENCES grants ON DELETE CASCADE, FOREIGN KEY (tenant_id,delegate_id) REFERENCES users);
+CREATE TABLE credentials (token_hash text PRIMARY KEY, tenant_id uuid NOT NULL, client_id text NOT NULL, delegate_id uuid NOT NULL, grant_id uuid NOT NULL, grant_version integer NOT NULL, client_epoch integer NOT NULL, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY (tenant_id,grant_id) REFERENCES grants ON DELETE CASCADE, FOREIGN KEY (tenant_id,client_id) REFERENCES clients, FOREIGN KEY (tenant_id,delegate_id) REFERENCES users);
+CREATE TABLE decision_runs (tenant_id uuid NOT NULL, id uuid NOT NULL, client_id text NOT NULL, delegate_id uuid NOT NULL, grant_id uuid NOT NULL, context_id uuid NOT NULL, token_hash text NOT NULL, request jsonb NOT NULL, body_digest text NOT NULL, idempotency_key uuid NOT NULL, auth_snapshot jsonb NOT NULL, encrypted_inputs text NOT NULL, state text NOT NULL CHECK (state IN ('queued','authorizing','resolving','ranking','preparing','release_pending','released','denied','needs_input','cancelled','stale','failed')), result jsonb, error_code text, lease_until timestamptz, attempts integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (tenant_id,id), UNIQUE(tenant_id,client_id,idempotency_key), FOREIGN KEY(tenant_id,grant_id) REFERENCES grants ON DELETE CASCADE, FOREIGN KEY(tenant_id,context_id) REFERENCES contexts, FOREIGN KEY(tenant_id,client_id) REFERENCES clients, FOREIGN KEY(tenant_id,delegate_id) REFERENCES users, FOREIGN KEY(token_hash) REFERENCES credentials);
+CREATE INDEX runs_work ON decision_runs(state,lease_until,created_at);
+CREATE TABLE release_receipts (tenant_id uuid NOT NULL, id uuid NOT NULL, run_id uuid NOT NULL, client_id text NOT NULL, delegate_id uuid NOT NULL, grant_version integer NOT NULL, context_revision integer NOT NULL, fields jsonb NOT NULL, payload_digest text NOT NULL, authorized_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES decision_runs ON DELETE CASCADE);
+CREATE TABLE selections (tenant_id uuid NOT NULL, run_id uuid NOT NULL, delegate_id uuid NOT NULL, item_id text NOT NULL, title text NOT NULL, saved_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,run_id,delegate_id,item_id), FOREIGN KEY(tenant_id,run_id) REFERENCES decision_runs ON DELETE CASCADE);
+CREATE TABLE audit_events (tenant_id uuid NOT NULL REFERENCES tenants ON DELETE CASCADE, id uuid NOT NULL, action text NOT NULL, subject_id text NOT NULL, detail jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,id));
+CREATE TABLE outbox (tenant_id uuid NOT NULL REFERENCES tenants ON DELETE CASCADE, id uuid NOT NULL, kind text NOT NULL, subject_id uuid NOT NULL, processed_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,id));
+CREATE TABLE worker_heartbeats (id text PRIMARY KEY, last_seen timestamptz NOT NULL DEFAULT now());
+CREATE TABLE request_limits (bucket text PRIMARY KEY, window_start timestamptz NOT NULL, used integer NOT NULL);
+CREATE FUNCTION immutable_record() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable record'; END $$;
+CREATE TRIGGER immutable_context_revision BEFORE UPDATE OR DELETE ON context_revisions FOR EACH ROW EXECUTE FUNCTION immutable_record();
+CREATE TRIGGER immutable_grant_revision BEFORE UPDATE OR DELETE ON grant_revisions FOR EACH ROW EXECUTE FUNCTION immutable_record();
+CREATE TRIGGER immutable_catalog_snapshot BEFORE UPDATE OR DELETE ON catalog_snapshots FOR EACH ROW EXECUTE FUNCTION immutable_record();
+CREATE TRIGGER immutable_release_receipt BEFORE UPDATE OR DELETE ON release_receipts FOR EACH ROW EXECUTE FUNCTION immutable_record();
+CREATE TRIGGER immutable_audit_event BEFORE UPDATE OR DELETE ON audit_events FOR EACH ROW EXECUTE FUNCTION immutable_record();
+CREATE FUNCTION monotone_context() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.revision <> OLD.revision + 1 THEN RAISE EXCEPTION 'context revision must advance exactly once'; END IF; RETURN NEW; END $$;
+CREATE TRIGGER context_revision_advances BEFORE UPDATE ON contexts FOR EACH ROW EXECUTE FUNCTION monotone_context();
+DO $$ DECLARE table_name text; BEGIN
+  FOREACH table_name IN ARRAY ARRAY['tenants','users','owner_sessions','clients','contexts','context_revisions','catalog_snapshots','catalog_heads','grants','grant_revisions','invitations','credentials','decision_runs','release_receipts','selections','audit_events','outbox'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',table_name);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',table_name);
+    EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',table_name);
+  END LOOP;
+END $$;
+CREATE POLICY owner_session_lookup ON owner_sessions FOR SELECT USING (token_hash = current_setting('app.lookup_hash',true));
+CREATE POLICY invitation_lookup ON invitations FOR SELECT USING (token_hash = current_setting('app.lookup_hash',true));
+CREATE POLICY credential_lookup ON credentials FOR SELECT USING (token_hash = current_setting('app.lookup_hash',true));
+CREATE FUNCTION active_demo_tenants() RETURNS TABLE(tenant_id uuid) LANGUAGE sql SECURITY DEFINER SET search_path=public AS $$ SELECT tenant_id FROM tenants WHERE expires_at > now() $$;
+REVOKE ALL ON FUNCTION active_demo_tenants() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION active_demo_tenants() TO tastekeeper_runtime;
+GRANT USAGE ON SCHEMA public TO tastekeeper_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO tastekeeper_runtime;
+REVOKE ALL ON schema_migrations FROM tastekeeper_runtime;
+INSERT INTO schema_migrations(version) VALUES ('001_gateway');
+COMMIT;

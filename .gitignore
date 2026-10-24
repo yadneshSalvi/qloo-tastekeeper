@@ -23,6 +23,7 @@ test-results/
 .artifacts/
 *.log
 *.tsbuildinfo
+next-env.d.ts
 
 # Local service/deployment state.
 .vercel/
