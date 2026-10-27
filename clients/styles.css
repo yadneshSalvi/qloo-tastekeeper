@@ -2808,6 +2808,9 @@ body[data-client='places'] .card-content h3 {
   margin: 16px 0;
   color: #b9c9d9;
 }
+.evidence-dialog .result-warning {
+  color: var(--text);
+}
 .choice-explanation {
   padding: 16px;
   border: 1px solid var(--border);

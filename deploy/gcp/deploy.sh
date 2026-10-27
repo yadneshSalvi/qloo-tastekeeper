@@ -59,7 +59,7 @@ for client in books media places; do
   client_url="https://tastekeeper-$client-$TASTEKEEPER_GCP_PROJECT_NUMBER.$TASTEKEEPER_REGION.run.app"
   "$gc" run deploy "tastekeeper-$client" "${common[@]}" --clear-network \
     --service-account="tastekeeper-$client@$TASTEKEEPER_GCP_PROJECT.iam.gserviceaccount.com" \
-    --memory=256Mi --min=0 --max=1 --max-instances=1 --concurrency=20 --timeout=60 \
+    --memory=512Mi --min=0 --max=1 --max-instances=1 --concurrency=20 --timeout=60 \
     --startup-probe=httpGet.path=/health,httpGet.port=8080,timeoutSeconds=5,periodSeconds=10,failureThreshold=24 \
     --no-invoker-iam-check --command=node --args=--import,tsx,clients/server.ts \
     --set-env-vars="CLIENT_ID=$client,CLIENT_HOST=0.0.0.0,PUBLIC_ORIGIN=$client_url,GATEWAY_ORIGIN=$web_url,OWNER_ORIGIN=$web_url" \
