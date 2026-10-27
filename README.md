@@ -12,6 +12,8 @@ This repository contains a guest demo with live-provider and explicitly labelled
 
 _Fictional Mira’s recipient workspace, captured from the hosted application._
 
+[Watch the three-minute demonstration](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app) · [Release evidence](docs/RELEASE.md)
+
 ## Try the hosted demo
 
 | Surface             | Hosted application                                                     |
@@ -101,7 +103,7 @@ Playwright needs all five local processes and the demo database running. Every t
 
 The Qloo probe starts the actual installed official stdio harness and checks its advertised tools and contract. It does not send an authenticated recommendation request. All six official workflow statuses—`ok`, `empty`, `needs_input`, `partial`, `degraded`, `error`—remain distinct in the adapter.
 
-The dated [verification record](docs/verification.md) records local and hosted checks, including [the successful CI run](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40432245540), desktop/mobile browser coverage, and explicit post-revocation HTTP denials. Hosted screenshots show fictional demo roles, not customer or preference-study outcomes.
+The dated [verification record](docs/verification.md) records local and hosted checks, including [the successful CI run](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40434671565), desktop/mobile browser coverage, and explicit post-revocation HTTP denials. Hosted screenshots show fictional demo roles, not customer or preference-study outcomes.
 
 ## Live configuration and hosting
 

@@ -14,7 +14,7 @@ Technical checks below were run against the implemented guest application. They 
 | Keyless optimized build  | `DATABASE_URL= QLOO_API_KEY= OPENAI_API_KEY= AGENT_ENABLED=false pnpm build` passed. Database-dependent pages remain request-bound.                                                                                                                                                                                                                    |
 | Private mapping loader   | Validated the operator-reviewed six-reference/fifteen-item configuration without printing identifiers or provider records.                                                                                                                                                                                                                             |
 
-[CI run 40432245540](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40432245540) passed on 27 October 2026 at commit `db0046c`. It built without database credentials, used verified PostgreSQL TLS and a restricted runtime login, exercised the production HTTP worker without provider keys, and ran the browser suite against the production gateway behind local HTTPS fronts.
+[CI run 40434671565](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40434671565) passed on 27 October 2026 at commit `5382923`. It built without database credentials, used verified PostgreSQL TLS and a restricted runtime login, exercised the production HTTP worker without provider keys, and ran the browser suite against the production gateway behind local HTTPS fronts.
 
 ## Database and provider boundaries
 

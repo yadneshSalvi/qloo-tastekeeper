@@ -2,9 +2,9 @@
 
 **Thoughtful choices. Your terms.**
 
-[Try TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app) · [Public source](https://github.com/yadneshSalvi/qloo-tastekeeper)
+[Try TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app) · [Public source](https://github.com/yadneshSalvi/qloo-tastekeeper) · [Watch the three-minute film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app)
 
-TASTEKEEPER is a recipient-owned preference gateway for independent agents and apps. A giver can receive a useful book suggestion without receiving the recipient's reference list. The recipient decides which context, references, client, purpose, public fields, catalog, duration, and request allowance may be used. Corrections affect future choices; revocation is checked again before a result or saved choice can be released.
+TASTEKEEPER is a recipient-owned preference gateway for independent agents and apps. A giver can receive a useful book suggestion without receiving the recipient's reference list. The recipient selects the context, references, client, purpose, duration, and request allowance, and approves the client’s fixed public fields and named catalog. Corrections affect future choices; revocation is checked again before a result or saved choice can be released.
 
 ## The demonstration
 
