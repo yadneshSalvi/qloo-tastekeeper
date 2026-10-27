@@ -4,10 +4,10 @@ The recipient workspace owns private reference contexts and permission decisions
 
 ```mermaid
 flowchart LR
-  O[Recipient browser\n127.0.0.1:3104] --> W[Next.js owner API]
-  B[Bookshop browser\nbooks.localhost:3114] --> BC[Books server]
-  F[Film browser\nmedia.localhost:3115] --> FC[Films server]
-  P[Outings browser\nplaces.localhost:3116] --> PC[Places server]
+  O[Recipient browser\nOwner origin] --> W[Next.js owner API]
+  B[Bookshop browser\nBooks origin] --> BC[Books server]
+  F[Film browser\nFilms origin] --> FC[Films server]
+  P[Outings browser\nPlaces origin] --> PC[Places server]
   BC --> G[Typed gateway /v1]
   FC --> G
   PC --> G
@@ -21,6 +21,8 @@ flowchart LR
 ```
 
 The three clients have no database configuration or imports. Their server secrets are distinct, their host-only cookies have distinct hosts and names, and their short-lived gateway credentials stay encrypted in the gateway database behind hashed opaque session handles. The owner application is the only browser surface that hydrates private reference names. The code intentionally labels the recipient and giver identities as an isolated role-play; this is not an OIDC or verified-account implementation.
+
+The [hosted applications](../README.md#try-the-hosted-demo) use four separate public Cloud Run HTTPS origins. A fifth Cloud Run service handles task execution behind IAM; it is not publicly invokable. The web service dispatches Cloud Tasks, and Cloud Scheduler invokes bounded maintenance. Web and worker use a restricted Cloud SQL runtime login over verified TLS; the three client services receive only their own client and session secrets, with no database or provider credentials. Deployment and migrations use separate identities. See the [GCP deployment guide](../deploy/gcp/README.md) for the deployed configuration.
 
 ## Invitation and permission
 
@@ -95,4 +97,6 @@ Authored mode is a separate explicit choice using deterministic rules. Provider 
 
 ## Observed verification
 
-The native policy suite, actual-PostgreSQL integration suite, independent-client contract tests, and real-browser flows are in [tests](../tests). In particular, database races exercise revocation during ranking, release/revocation lock order, token/grant state, allowance races, stale worker takeover, and delayed correction events. Browser tests exercise owner-only evidence, public-only client payloads, distinct host cookies, explicit correction, persisted selections, later-read revocation, mobile keyboard navigation, dialog focus return, and accessibility checks. These observations concern the local sample; they are not production scale or product-quality measurements.
+The native policy suite, actual-PostgreSQL integration suite, independent-client contract tests, and real-browser flows are in [tests](../tests). In particular, database races exercise revocation during ranking, release/revocation lock order, token/grant state, allowance races, stale worker takeover, and delayed correction events. Browser tests exercise owner-only evidence, public-only client payloads, distinct host cookies, explicit correction, persisted selections, later-read revocation, mobile keyboard navigation, dialog focus return, and accessibility checks.
+
+Independent hosted checks use fresh guest workspaces, authored rankings, and intercepted provider states. On each of the three deployed clients, actual new-request, result-read, and selection-save requests after owner revocation returned `403 GRANT_REVOKED`. Separate hosted deployment checks accepted the configured unique database CA, rejected an unrelated CA, and verified a restricted runtime identity and forced RLS. The [verification record](verification.md) distinguishes these technical observations from the [real-provider demonstration](live-observations.md); neither is a production-scale or preference-quality measurement.

@@ -46,6 +46,7 @@ test('recipient gift approval, a kept choice, explicit correction and revocation
   await page.goto('/');
   await page.getByRole('button', { name: 'Try a thoughtful gift' }).click();
   await expect(page).toHaveURL(/\/gifts\/new$/);
+  await page.waitForLoadState('load');
   const original = await workspace(page);
   const gift = original.contexts.find((c) => c.purpose === 'gift')!;
   const personal = original.contexts.find((c) => c.purpose === 'personal')!;

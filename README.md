@@ -8,7 +8,22 @@ This repository contains a guest demo with live-provider and explicitly labelled
 
 **Live mode uses Qloo to rank only the approved catalog and a bounded OpenAI tool workflow to explain public item facts.** Private recipient references never enter the explanation model. An explicitly selected authored sample also runs without provider keys. Real-provider observations are recorded separately in [live observations](docs/live-observations.md); no preference-quality, conversion, or merchant outcome is claimed.
 
-![The recipient workspace, captured from the running local sample](docs/screenshots/workspace-desktop.png)
+![The hosted recipient workspace](docs/screenshots/hosted-contexts.png)
+
+_Fictional Mira’s recipient workspace, captured from the hosted application._
+
+## Try the hosted demo
+
+| Surface             | Hosted application                                                     |
+| ------------------- | ---------------------------------------------------------------------- |
+| Recipient workspace | [TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app)         |
+| Books               | [The Reading Room](https://tastekeeper-books-hqzgkrycbq-uc.a.run.app)  |
+| Films               | [Tonight](https://tastekeeper-media-hqzgkrycbq-uc.a.run.app)           |
+| London outings      | [A Good Afternoon](https://tastekeeper-places-hqzgkrycbq-uc.a.run.app) |
+
+Start in the recipient workspace to create your own isolated 24-hour demo. Approve a connection there and follow its invitation to the named client. Each application has its own HTTPS host and host-only cookie. The clients need an approved invitation before making choices; **Authored sample** explicitly selects a provider-free ranking.
+
+These four public applications run on Cloud Run with a private task worker and Cloud SQL. The [deployment guide](deploy/gcp/README.md) describes the runtime identities, TLS, migrations, dispatch, and recovery. [Hosted verification](docs/verification.md#hosted-verification) records the independent browser and HTTP checks; [live observations](docs/live-observations.md) records the separate real-provider demonstration.
 
 ## Try it locally
 
@@ -86,7 +101,7 @@ Playwright needs all five local processes and the demo database running. Every t
 
 The Qloo probe starts the actual installed official stdio harness and checks its advertised tools and contract. It does not send an authenticated recommendation request. All six official workflow statuses—`ok`, `empty`, `needs_input`, `partial`, `degraded`, `error`—remain distinct in the adapter.
 
-The dated [verification record](docs/verification.md) records the observed checks and includes desktop/mobile screenshots.
+The dated [verification record](docs/verification.md) records local and hosted checks, including [the successful CI run](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40432245540), desktop/mobile browser coverage, and explicit post-revocation HTTP denials. Hosted screenshots show fictional demo roles, not customer or preference-study outcomes.
 
 ## Live configuration and hosting
 

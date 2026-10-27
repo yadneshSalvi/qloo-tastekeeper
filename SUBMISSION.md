@@ -2,6 +2,8 @@
 
 **Thoughtful choices. Your terms.**
 
+[Try TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app) · [Public source](https://github.com/yadneshSalvi/qloo-tastekeeper)
+
 TASTEKEEPER is a recipient-owned preference gateway for independent agents and apps. A giver can receive a useful book suggestion without receiving the recipient's reference list. The recipient decides which context, references, client, purpose, public fields, catalog, duration, and request allowance may be used. Corrections affect future choices; revocation is checked again before a result or saved choice can be released.
 
 ## The demonstration
@@ -35,6 +37,8 @@ The intended benefit is useful personalization with less unnecessary disclosure 
 ## Evidence and limits
 
 See [verification](docs/verification.md) for reproducible technical checks and [live observations](docs/live-observations.md) for measured provider calls. These are separate from authored examples and intended outcomes.
+
+The hosted demonstration completed four live decisions on their first worker attempts, with two completed AI tool steps per decision. Request creation to first authorized release took 4.88–5.99 seconds in those four runs. A separate 26-case hosted suite passed across desktop and mobile; actual request, result-read, and selection attempts after revocation returned `403 GRANT_REVOKED` on all three clients. These technical results do not establish recipient preference or real-world conversion.
 
 All catalog amounts are illustrative USD values. Publisher, studio, and venue links identify the public item; stock, prices, streaming rights, opening hours, admission, purchase, and booking are not verified. One book mapping is explicitly work-level rather than an exact edition match. Guest workspaces expire after 24 hours and are purged by maintenance; this is not durable account storage.
 

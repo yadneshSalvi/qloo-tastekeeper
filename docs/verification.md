@@ -14,6 +14,8 @@ Technical checks below were run against the implemented guest application. They 
 | Keyless optimized build  | `DATABASE_URL= QLOO_API_KEY= OPENAI_API_KEY= AGENT_ENABLED=false pnpm build` passed. Database-dependent pages remain request-bound.                                                                                                                                                                                                                    |
 | Private mapping loader   | Validated the operator-reviewed six-reference/fifteen-item configuration without printing identifiers or provider records.                                                                                                                                                                                                                             |
 
+[CI run 40432245540](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40432245540) passed on 27 October 2026 at commit `db0046c`. It built without database credentials, used verified PostgreSQL TLS and a restricted runtime login, exercised the production HTTP worker without provider keys, and ran the browser suite against the production gateway behind local HTTPS fronts.
+
 ## Database and provider boundaries
 
 Real PostgreSQL regressions cover concurrent invitation claims, tenant/client/delegate isolation and forced non-bypass RLS, idempotency conflicts, atomic request allowances, revocation during computation and release, correction effects, delayed outbox events, disabled clients and expiry, immutable histories, current catalog authority, and stale-worker fencing.
@@ -36,8 +38,26 @@ Isolated browser tests check host-only cookie separation, public-only client pay
 
 Screenshots from current test runs are generated under ignored `.artifacts/owner` and `.artifacts/clients`. Intercepted states are explicitly named `synthetic-*` under `.artifacts/ui-states`; they must not be presented as evidence of a live provider response. Traces and failure artifacts remain private because they may contain temporary demo invitation material.
 
+## Hosted verification
+
+On 27 October 2026, independent Chromium sessions exercised the [four deployed applications](../README.md#try-the-hosted-demo) at 1440×1000 and 390×844. The complete rerun passed **26 of 26 cases without retries** in 202.4 seconds: twelve actual application journeys with explicit authored rankings, twelve intercepted provider/search states, and two HTTP health/origin/IAM checks. It blocks unexpected external requests and unmocked provider-capable browser operations. Search and AI error fixtures are synthetic; the separate [live observations](live-observations.md) document actual provider execution.
+
+The hosted client journeys claim an invitation, make and save an authored choice, reload the durable session, verify host-only cookie and public-payload separation, and revoke that client’s permission. All three operations below returned the same actual denial on books, films, and places, at both viewport sizes:
+
+| Operation after owner revocation | Client route                        | Observed response           |
+| -------------------------------- | ----------------------------------- | --------------------------- |
+| New request                      | `POST /api/decisions`               | HTTP `403`, `GRANT_REVOKED` |
+| Read an existing result          | `GET /api/decisions/:id`            | HTTP `403`, `GRANT_REVOKED` |
+| Save a released choice           | `POST /api/decisions/:id/selection` | HTTP `403`, `GRANT_REVOKED` |
+
+The six sanitized records contain 18 observed HTTP denials, route placeholders, and timestamps; they omit owner, grant, session, invitation, and run identifiers. This is backend verification with disposable authored-sample fixtures, not a reconstruction of the live demo interface. The suite uses its own browser contexts and deletes only its own workspaces: fourteen automatic deletions returned `200` followed by a `401` workspace read, and two retention cases deleted their workspaces through the UI. Public health checks return `200`; wrong-origin client mutations return `403 ORIGIN_DENIED`; unauthenticated private-worker health and maintenance calls are denied by IAM.
+
+The actual hosted mobile home capture measures a 390px viewport, 390px document, and 390px client width, with no horizontal overflow, zero console/page errors, and no axe WCAG A/AA violations in that tested state. Private captures and sanitized evidence remain under ignored `.artifacts/hosted-qa`; they contain fictional guest roles. The reviewed public [recipient workspace](screenshots/hosted-contexts.png), [book choice](screenshots/hosted-book-choice.png), and [revocation](screenshots/hosted-revocation.png) screenshots come from the separate hosted live demonstration.
+
+A targeted notice contrast check used the actual client stylesheet with synthetic receipt markup and all network blocked. It reproduced the pale-on-cream drawer issue, then verified the explicit theme text color at 1440px and 390px: books 11.47:1, films 12.85:1, and places 9.28:1, with no color-contrast violations in the six corrected states. This isolates the CSS repair from any provider-quality claim.
+
 ## Limits of this evidence
 
-A local TLS handshake test verifies the default hostname check, acceptance under an explicitly trusted unique CA, and rejection with an unrelated CA even in `instance-ca` mode. Hosted negative-CA verification remains a separate deployment check.
+A local TLS handshake test verifies the default hostname check, acceptance under an explicitly trusted unique CA, and rejection with an unrelated CA even in `instance-ca` mode. The hosted deployment smoke check also accepted the configured instance CA, rejected an unrelated CA, verified forced RLS, and confirmed the restricted runtime could not use database-administration privileges.
 
 No participant preference study, large-scale load test, production identity verification, key-rotation/backup-restore drill, merchant availability check, purchase, or booking is claimed. Technical authorization correctness and real Qloo ranking observations are separate from evidence that a particular person prefers the suggestions.

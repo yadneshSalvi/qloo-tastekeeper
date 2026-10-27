@@ -64,4 +64,27 @@ After the owner ended Alex’s book connection, a new request in the already-ope
 
 The complete local verification consumed **30 Qloo HTTP requests**: the initial 24 probes, five application decisions (including the visibly failed first film attempt), and one owner identity search. It consumed **10 OpenAI HTTP requests**: eight across the four application calls that reached the model, and two in the bounded public-only diagnostic. Every successful final-contract decision used one Qloo request and two model requests. The failed film request used no model calls; revocation and restored result reads caused no additional provider calls.
 
-Hosted deployment and final browser evidence are recorded separately after release.
+The hosted application rehearsal below is separate from these local measurements.
+
+## Hosted application rehearsal — 27 October 2026 UTC
+
+A fresh fictional Mira workspace repeated the workflow on the released Google Cloud owner application and three separately hosted clients. All four actual live decisions completed on their first worker attempt, with no provider retry or authored replacement. The public-fact agent completed both tool steps in every case.
+
+| Hosted request         | Qloo returned / supplied | Public choices, in order                            | Validated public facts | Agent elapsed | Creation to first authorized release |
+| ---------------------- | ------------------------ | --------------------------------------------------- | ---------------------- | ------------- | ------------------------------------ |
+| Gift before correction | 4 / 5                    | Trees; Delights; Gathering                          | 3                      | 3.930 s       | 4.951 s                              |
+| Personal films         | 5 / 5                    | Paterson; Kiki’s Delivery Service; Moonrise Kingdom | 6                      | 4.061 s       | 4.932 s                              |
+| Personal London places | 3 / 5                    | Tate Modern; Daunt Books Marylebone; Kew Gardens    | 3                      | 4.150 s       | 4.883 s                              |
+| Gift after correction  | 4 / 5                    | Gathering; Trees; Delights                          | 3                      | 4.781 s       | 5.987 s                              |
+
+Each request used one Qloo ranking call and two OpenAI requests. The latency endpoint is the earliest persisted release authorization, not the later browser repaint or a result reread. These four individual measurements are not a percentile or latency guarantee.
+
+The owner also ran one live Agnes Martin identity search, reviewed five namesakes, and explicitly confirmed the painter born in 1912 into a separate Studio Sundays context. This advanced that context to revision 2 without broadening another permission.
+
+The recipient approved the original Gift references for Alex through The Reading Room. The first live choice was saved. Separate Personal grants produced and saved Paterson and Tate Modern. The recipient then removed only Braiding Sweetgrass from Gift, after reviewing the correction’s scope. The next book request retained the same five-item inventory and brief. Its first choice changed from Trees to Gathering, and that choice was saved. No preference improvement is inferred from this change.
+
+The client’s receipt exposed public metadata, context revision 2, grant version 1, and the permitted output fields. The owner-only receipt additionally exposed the selected references and actual execution counters: four Qloo candidates returned, two model requests, two completed tool steps, and three validated public facts for the corrected book request.
+
+The owner ended the book connection while one request remained unused. A new request from the already-open client was denied with `GRANT_REVOKED`, and the client removed its actionable results. The two Personal connections remained active. The browser console error count was zero across the owner and three client tabs in this rehearsal. Separate technical verification covers revoked result reads and selections; the visible recorded action was a new request.
+
+The hosted rehearsal consumed **five Qloo requests**—one search and four rankings—and **eight OpenAI requests**. Cumulative observed TASTEKEEPER integration work, including the earlier catalog checks, local rehearsal, failed requests, and bounded diagnostic, totals **35 Qloo requests and 18 OpenAI requests**. These are observed usage counts, not remaining-credit estimates. A temporary read-only cloud job extracted the sanitized measurements and was removed afterward.

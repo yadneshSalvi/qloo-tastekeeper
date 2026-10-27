@@ -1,6 +1,6 @@
 # Gateway API
 
-The canonical owner/gateway origin is `http://127.0.0.1:3104`. Route bodies are strict Zod contracts in [contracts.ts](../src/domain/contracts.ts). Private responses use `private, no-store`; they must not be cached in a CDN or service worker. Errors use `{ "error": { "code": "…", "message": "…" } }` with safe messages.
+The hosted owner/gateway origin is [tastekeeper-web-hqzgkrycbq-uc.a.run.app](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app); local development uses `http://127.0.0.1:3104`. The three independent [client origins](../README.md#try-the-hosted-demo) expose their own browser APIs. Route bodies are strict Zod contracts in [contracts.ts](../src/domain/contracts.ts). Private responses use `private, no-store`; they must not be cached in a CDN or service worker. Errors use `{ "error": { "code": "…", "message": "…" } }` with safe messages.
 
 ## Owner endpoints
 
@@ -110,6 +110,8 @@ The six Qloo adapter statuses are separate from durable run states. `partial` an
 
 The browser-facing `/api/*` endpoints of each separate reference client deliberately accept a much narrower brief than `/v1/decisions`; see [clients.md](clients.md). There is no general proxy, arbitrary destination URL, delegated owner-context read, or browser credential endpoint.
 
+Hosted checks exercised all three client APIs after the owner revoked their grants. `POST /api/decisions`, `GET /api/decisions/:id`, and `POST /api/decisions/:id/selection` each returned HTTP `403` with `error.code: "GRANT_REVOKED"`, including when an earlier result had already been saved. The [verification record](verification.md#hosted-verification) describes the isolated authored-sample fixtures used for those checks.
+
 ## Durable browser sessions, search and deletion
 
 `POST /v1/browser-sessions/claim` accepts the same single-use invitation body and returns public session metadata plus a random session handle only to the authenticated client backend. The backend places that handle in a signed, HttpOnly host-only cookie; it sends the handle server-to-server thereafter. The gateway stores the credential encrypted, renews it only under the original grant/client binding, and persists the last public brief and run membership. `POST /v1/browser-sessions/disconnect` with `{}` deletes the handle.
@@ -126,7 +128,17 @@ Owner search contracts (owner cookie and exact Origin required for mutations):
 
 A search failure is never filled with authored alternatives. `CORRECTION_CONFLICT` requires refreshing the context and reviewing the intended addition again. `REFERENCE_ALREADY_ADDED` identifies an already active exact identity. Search results expire after 30 minutes. Contexts support up to 30 active references, but every grant still requires an explicit subset of at most ten.
 
-The optional client decision `brief` contains `occasion` (`birthday`, `thank_you`, `just_because`, `for_me`) and an optional note of at most 240 characters. It is public task input for the explanation agent, never an authorization argument. Released responses may include `explanations: [{itemId,text}]`, `provenance.mappedCount/unmappedCount`, and a labelled `provenance.agent` status. Owner evidence separately includes provider attempt counts and safe agent checkpoints.
+The optional client decision `brief` contains `occasion` (`birthday`, `thank_you`, `just_because`, `for_me`) and an optional note of at most 240 characters. It is public task input for the explanation agent, never an authorization argument. Released responses may include `explanations: [{itemId,text}]` and these public provenance counts:
+
+| Field                           | Meaning                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| `candidateCount`                | Submitted approved catalog candidates, before hard-constraint filtering. |
+| `mappedCount` / `unmappedCount` | Eligible candidates with / without a reviewed Qloo identity.             |
+| `returnedCount`                 | Approved candidates actually returned by Qloo, before the display limit. |
+| `selectedCount`                 | Choices released for display.                                            |
+| `agent.status`                  | Independent status of public-fact explanations.                          |
+
+Incomplete Qloo coverage does not imply that the AI tools failed. Missing candidates are not filled in, and unavailable AI explanations do not replace a valid Qloo ranking. Owner-only evidence separately reports `qloo.returnedCount/sentCandidateCount` and `agent.requestCount/toolSteps/groundedFactCount`, with safe checkpoints and sanitized failure codes. Neither client nor owner receipts expose provider response bodies or model reasoning.
 
 ## Private worker contract
 
