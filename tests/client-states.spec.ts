@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 // state tests cannot call Qloo, an AI provider, or a real owner workspace.
 test.use({ trace: 'off' });
 
-const origin = 'http://books.localhost:3114';
+const origin = process.env.CLIENT_BOOKS_ORIGIN || 'http://books.localhost:3114';
 const item = {
   id: 'ui-test-book',
   title: 'A Synthetic UI Test Book',

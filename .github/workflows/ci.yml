@@ -114,18 +114,33 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - name: Verify independent clients against the production gateway
         shell: bash
+        env:
+          APP_ORIGIN: https://127.0.0.1:3144
+          CLIENT_BOOKS_ORIGIN: https://books.localhost:3145
+          CLIENT_MEDIA_ORIGIN: https://media.localhost:3146
+          CLIENT_PLACES_ORIGIN: https://places.localhost:3147
+          PLAYWRIGHT_HTTPS_ERRORS: ignore
         run: |
+          tastekeeper_browser_tls="$RUNNER_TEMP/tastekeeper-browser-tls"
+          mkdir -p "$tastekeeper_browser_tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$tastekeeper_browser_tls/server.key" -out "$tastekeeper_browser_tls/server.crt" \
+            -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:books.localhost,DNS:media.localhost,DNS:places.localhost' > /dev/null 2>&1
+          TASTEKEEPER_TEST_TLS_CERT="$tastekeeper_browser_tls/server.crt" TASTEKEEPER_TEST_TLS_KEY="$tastekeeper_browser_tls/server.key" \
+            node .github/scripts/test-https-proxy.mjs > /tmp/tastekeeper-ci-https.log 2>&1 &
+          tastekeeper_https_pid=$!
           pnpm start > /tmp/tastekeeper-ci-web.log 2>&1 &
           tastekeeper_web_pid=$!
           pnpm worker > /tmp/tastekeeper-ci-worker.log 2>&1 &
           tastekeeper_worker_pid=$!
-          pnpm client:books > /tmp/tastekeeper-ci-books.log 2>&1 &
+          PUBLIC_ORIGIN="$CLIENT_BOOKS_ORIGIN" OWNER_ORIGIN="$APP_ORIGIN" pnpm client:books > /tmp/tastekeeper-ci-books.log 2>&1 &
           tastekeeper_books_pid=$!
-          pnpm client:media > /tmp/tastekeeper-ci-media.log 2>&1 &
+          PUBLIC_ORIGIN="$CLIENT_MEDIA_ORIGIN" OWNER_ORIGIN="$APP_ORIGIN" pnpm client:media > /tmp/tastekeeper-ci-media.log 2>&1 &
           tastekeeper_media_pid=$!
-          pnpm client:places > /tmp/tastekeeper-ci-places.log 2>&1 &
+          PUBLIC_ORIGIN="$CLIENT_PLACES_ORIGIN" OWNER_ORIGIN="$APP_ORIGIN" pnpm client:places > /tmp/tastekeeper-ci-places.log 2>&1 &
           tastekeeper_places_pid=$!
-          trap 'kill "$tastekeeper_web_pid" "$tastekeeper_worker_pid" "$tastekeeper_books_pid" "$tastekeeper_media_pid" "$tastekeeper_places_pid" 2>/dev/null || true' EXIT
+          trap 'kill "$tastekeeper_https_pid" "$tastekeeper_web_pid" "$tastekeeper_worker_pid" "$tastekeeper_books_pid" "$tastekeeper_media_pid" "$tastekeeper_places_pid" 2>/dev/null || true' EXIT
           for tastekeeper_port in 3104 3114 3115 3116; do
             tastekeeper_health=/health
             if [ "$tastekeeper_port" = 3104 ]; then tastekeeper_health=/api/health; fi
@@ -134,5 +149,18 @@ jobs:
               sleep 1
             done
             curl --fail --silent "http://127.0.0.1:$tastekeeper_port$tastekeeper_health" > /dev/null
+          done
+          for tastekeeper_frontend in "$APP_ORIGIN" "$CLIENT_BOOKS_ORIGIN" "$CLIENT_MEDIA_ORIGIN" "$CLIENT_PLACES_ORIGIN"; do
+            tastekeeper_frontend_health=/health
+            if [ "$tastekeeper_frontend" = "$APP_ORIGIN" ]; then tastekeeper_frontend_health=/api/health; fi
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --noproxy '*' --cacert "$tastekeeper_browser_tls/server.crt" \
+                --resolve "${tastekeeper_frontend#https://}:127.0.0.1" \
+                "$tastekeeper_frontend$tastekeeper_frontend_health" > /dev/null; then break; fi
+              sleep 1
+            done
+            curl --fail --silent --noproxy '*' --cacert "$tastekeeper_browser_tls/server.crt" \
+              --resolve "${tastekeeper_frontend#https://}:127.0.0.1" \
+              "$tastekeeper_frontend$tastekeeper_frontend_health" > /dev/null
           done
           pnpm test:e2e

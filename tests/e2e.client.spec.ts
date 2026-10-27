@@ -8,19 +8,19 @@ test.use({ trace: 'off' });
 const ownerOrigin = process.env.APP_ORIGIN || 'http://127.0.0.1:3104';
 const apps = {
   books: {
-    origin: 'http://books.localhost:3114',
+    origin: process.env.CLIENT_BOOKS_ORIGIN || 'http://books.localhost:3114',
     purpose: 'gift',
     submit: 'Find a thoughtful book',
     source: 'View book source',
   },
   media: {
-    origin: 'http://media.localhost:3115',
+    origin: process.env.CLIENT_MEDIA_ORIGIN || 'http://media.localhost:3115',
     purpose: 'personal',
     submit: 'Find tonight’s film',
     source: 'Open title source',
   },
   places: {
-    origin: 'http://places.localhost:3116',
+    origin: process.env.CLIENT_PLACES_ORIGIN || 'http://places.localhost:3116',
     purpose: 'personal',
     submit: 'Find a place to begin',
     source: 'Open directions',
@@ -206,6 +206,7 @@ for (const clientId of Object.keys(apps) as ClientId[]) {
     const cookies = await context.cookies(app.origin);
     expect(cookies.map((cookie) => cookie.name)).toEqual([`tastekeeper_${clientId}_session`]);
     expect(cookies[0]!.httpOnly).toBe(true);
+    expect(cookies[0]!.secure).toBe(new URL(app.origin).protocol === 'https:');
     expect(cookies[0]!.domain).toBe(new URL(app.origin).hostname);
     await page.getByRole('button', { name: app.submit, exact: false }).click();
     await expect(page.locator('.result-card')).toHaveCount(3);

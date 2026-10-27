@@ -5,6 +5,7 @@ import { mkdir } from 'node:fs/promises';
 
 // Invitation fragments are short-lived capabilities, so do not record traces.
 test.use({ trace: 'off' });
+const booksOrigin = process.env.CLIENT_BOOKS_ORIGIN || 'http://books.localhost:3114';
 
 async function workspace(page: Page): Promise<Workspace> {
   const response = await page.request.get('/api/workspace');
@@ -67,14 +68,12 @@ test('recipient gift approval, a kept choice, explicit correction and revocation
   const client = await popup;
   client.on('pageerror', (error) => browserErrors.push(error.message));
   await expect(client.getByRole('heading', { name: 'A thoughtful brief.' })).toBeVisible();
-  expect(new URL(client.url()).hostname).toBe('books.localhost');
+  expect(new URL(client.url()).hostname).toBe(new URL(booksOrigin).hostname);
   expect(Boolean(new URL(client.url()).hash)).toBe(false);
   expect((await context.cookies(client.url())).some((c) => c.name === 'tastekeeper_owner')).toBe(
     false,
   );
-  const session = await (
-    await client.request.get('http://books.localhost:3114/api/session')
-  ).json();
+  const session = await (await client.request.get(booksOrigin + '/api/session')).json();
   const serialized = JSON.stringify(session);
   for (const signal of gift.signals) {
     expect(serialized).not.toContain(signal.title);
@@ -120,7 +119,7 @@ test('recipient gift approval, a kept choice, explicit correction and revocation
   expect(corrected.contexts.find((c) => c.id === personal.id)).toEqual(personal);
   expect(corrected.decisions.find((d) => d.id === oldRun)?.stale).toBe(true);
   await capture(page, 'correction', testInfo.project.name);
-  const staleRead = await client.request.get(`http://books.localhost:3114/api/decisions/${oldRun}`);
+  const staleRead = await client.request.get(`${booksOrigin}/api/decisions/${oldRun}`);
   expect(staleRead.status()).toBe(409);
   expect((await staleRead.json()).error.code).toBe('REVISION_CHANGED');
   await client.getByRole('button', { name: 'Find a thoughtful book' }).click();
@@ -144,9 +143,7 @@ test('recipient gift approval, a kept choice, explicit correction and revocation
   await page.getByRole('button', { name: 'End access' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'End access' }).click();
   await expect(page.getByRole('status')).toContainText('Access ended');
-  const deniedRead = await client.request.get(
-    `http://books.localhost:3114/api/decisions/${latestRun}`,
-  );
+  const deniedRead = await client.request.get(`${booksOrigin}/api/decisions/${latestRun}`);
   expect(deniedRead.status()).toBe(403);
   expect((await deniedRead.json()).error.code).toBe('GRANT_REVOKED');
   await client.getByRole('button', { name: 'Retry connection', exact: true }).click();

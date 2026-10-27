@@ -8,7 +8,9 @@ export default defineConfig({
   expect: { timeout: 15000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:3104',
+    baseURL: process.env.APP_ORIGIN || 'http://127.0.0.1:3104',
+    // Only the isolated CI frontend uses a temporary self-signed browser certificate.
+    ignoreHTTPSErrors: process.env.PLAYWRIGHT_HTTPS_ERRORS === 'ignore',
     browserName: 'chromium',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
