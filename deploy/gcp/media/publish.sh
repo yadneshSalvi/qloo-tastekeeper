@@ -28,7 +28,7 @@ digest=$("$gc" artifacts docker images describe "$TASTEKEEPER_MEDIA_IMAGE" --for
 [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { printf '%s\n' 'An immutable image digest is required.' >&2; exit 1; }
 image="${TASTEKEEPER_MEDIA_IMAGE%:*}@$digest"
 "$gc" run deploy tastekeeper-demo --region="$TASTEKEEPER_REGION" --image="$image" \
-  --service-account="$media_sa" --port=8080 --cpu=1 --memory=512Mi \
+  --service-account="$media_sa" --port=8080 --use-http2 --cpu=1 --memory=512Mi \
   --cpu-throttling --execution-environment=gen2 --min=0 --min-instances=0 \
   --max=1 --max-instances=1 --concurrency=40 --timeout=300 \
   --clear-network --clear-vpc-connector --clear-env-vars --clear-secrets \

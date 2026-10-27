@@ -2,13 +2,15 @@
 
 **Thoughtful choices. Your terms.**
 
-[Try TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app) · [Public source](https://github.com/yadneshSalvi/qloo-tastekeeper) · [Watch the three-minute film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app)
+[Try TASTEKEEPER](https://tastekeeper-web-hqzgkrycbq-uc.a.run.app) · [Public source](https://github.com/yadneshSalvi/qloo-tastekeeper) · [Watch the 3:33 film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app)
 
 TASTEKEEPER is a recipient-owned preference gateway for independent agents and apps. A giver can receive a useful book suggestion without receiving the recipient's reference list. The recipient selects the context, references, client, purpose, duration, and request allowance, and approves the client’s fixed public fields and named catalog. Corrections affect future choices; revocation is checked again before a result or saved choice can be released.
 
 ## The demonstration
 
 Mira is a fictional recipient in an isolated guest workspace. Alex is the fictional giver. Mira approves a limited connection to **The Reading Room**, which asks Qloo to rank a fixed five-book inventory. A bounded AI concierge inspects public inventory facts and prepares supported explanations. Its model context excludes Mira's private references, cultural identifiers, and profile.
+
+The 3:33 film follows this book-gift flow using actual application recordings. The same brief and catalog first return **The Hidden Life of Trees**, then **The Art of Gathering** after a Gift-only correction. Both requests return four of five eligible candidates. The film also shows both receipt views and a real denied request after revocation with one request still unused. Inputs play at their recorded speed; captions are optional.
 
 Mira can correct the Gift context without silently changing her Personal context. The next authorized request uses the correction. She can then revoke the connection, after which the gateway denies future recommendation requests, result reads, and selections. Information already shown cannot be recalled, and recommendations themselves can reveal something about taste.
 
@@ -38,7 +40,7 @@ The intended benefit is useful personalization with less unnecessary disclosure 
 
 See [verification](docs/verification.md) for reproducible technical checks and [live observations](docs/live-observations.md) for measured provider calls. These are separate from authored examples and intended outcomes.
 
-The hosted demonstration completed four live decisions on their first worker attempts, with two completed AI tool steps per decision. Request creation to first authorized release took 4.88–5.99 seconds in those four runs. A separate 26-case hosted suite passed across desktop and mobile; actual request, result-read, and selection attempts after revocation returned `403 GRANT_REVOKED` on all three clients. These technical results do not establish recipient preference or real-world conversion.
+The earlier hosted verification completed four live decisions on their first worker attempts, with two completed AI tool steps per decision. Request creation to first authorized release took 4.88–5.99 seconds in those four runs. A separate 26-case hosted suite passed across desktop and mobile; actual request, result-read, and selection attempts after revocation returned `403 GRANT_REVOKED` on all three clients. These technical results do not establish recipient preference or real-world conversion.
 
 All catalog amounts are illustrative USD values. Publisher, studio, and venue links identify the public item; stock, prices, streaming rights, opening hours, admission, purchase, and booking are not verified. One book mapping is explicitly work-level rather than an exact edition match. Guest workspaces expire after 24 hours and are purged by maintenance; this is not durable account storage.
 

@@ -1,6 +1,6 @@
-# TASTEKEEPER v0.1.0
+# TASTEKEEPER v0.2.0 — demonstration film
 
-The hosted application was verified on **27 October 2026**. The demonstration film was published separately after source, caption, decoded-frame, and audio checks.
+This media release replaces the demonstration film with recorded application interactions. The hosted application remains the v0.1.0 implementation verified on **27 October 2026**; no owner, client, gateway, or worker service is redeployed.
 
 | Item                        | Status or location                                                                                            |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -8,9 +8,9 @@ The hosted application was verified on **27 October 2026**. The demonstration fi
 | Books client                | [The Reading Room](https://tastekeeper-books-hqzgkrycbq-uc.a.run.app)                                         |
 | Films client                | [Tonight](https://tastekeeper-media-hqzgkrycbq-uc.a.run.app)                                                  |
 | London outings client       | [A Good Afternoon](https://tastekeeper-places-hqzgkrycbq-uc.a.run.app)                                        |
-| CI-verified source revision | [`5382923`](https://github.com/yadneshSalvi/qloo-tastekeeper/commit/538292394974f676cda6f66e2b23e34946e284c8) |
-| GitHub CI                   | [Run 40434671565 — passed](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40434671565)         |
-| Demonstration film          | [Watch the three-minute film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app)                               |
+| Application source revision | [`5382923`](https://github.com/yadneshSalvi/qloo-tastekeeper/commit/538292394974f676cda6f66e2b23e34946e284c8) |
+| Application verification CI | [Run 40434671565 — passed](https://github.com/yadneshSalvi/qloo-tastekeeper/actions/runs/40434671565)         |
+| Demonstration film          | [Watch the 3:33 film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app)                                       |
 
 Start in the recipient workspace, create an isolated guest demo, and approve a connection before opening its client invitation. The recipient and giver are fictional roles; the four applications have separate HTTPS hosts and host-only browser cookies.
 
@@ -43,9 +43,9 @@ After owner revocation, each of the three hosted clients denied a new request, a
 
 The hosted 390px owner home had no horizontal overflow, console errors, or page errors, and no axe WCAG A/AA violations in that tested state. A targeted check of the corrected receipt notice passed contrast at both viewport sizes in all three client themes. These are scoped automated checks, not a comprehensive accessibility audit. See [verification scope and results](verification.md).
 
-## Observed live demonstration
+## Earlier observed live demonstration
 
-A separate hosted walkthrough used fictional Mira and Alex. **All four live decisions completed on their first worker attempt**, each with one Qloo ranking request and two completed AI tool steps. No provider retry or authored replacement was used in these four decisions.
+The earlier application-verification walkthrough used fictional Mira and Alex. **All four live decisions completed on their first worker attempt**, each with one Qloo ranking request and two completed AI tool steps. No provider retry or authored replacement was used in these four decisions.
 
 | Hosted request         | First released choice    | Qloo returned / supplied | Creation to first authorized release |
 | ---------------------- | ------------------------ | ------------------------ | ------------------------------------ |
@@ -82,18 +82,26 @@ Application code and original SVG/CSS artwork are [MIT licensed](../LICENSE). Se
 
 ## Demonstration film
 
-The [public film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app) follows the actual hosted fictional demonstration: explicit identity confirmation, scoped permission, live choices in three independent clients, a Gift-only correction, an owner receipt and a separately labelled public outing receipt, and denial after revocation. A separate technical-verification scene reports actual hosted HTTP denials from authored-sample test workspaces; it is not presented as the same live-provider walkthrough.
+The [3:33 public film](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app) follows Alex choosing a book for Mira in a fictional demonstration. Mira approves a Gift context for The Reading Room, with a 24-hour limit and three requests. Alex types a brief, inspects the live result and its public source facts, and saves _The Hidden Life of Trees_. Mira then previews and applies removal of _Braiding Sweetgrass_ only from Gift; Personal is unchanged. The same brief and catalog produce _The Art of Gathering_ first on the second request. Both live rankings return four of five eligible options; unreturned items are not filled in. The film compares the client and owner receipts, then shows a real `GRANT_REVOKED` denial after Mira ends access with one request unused. This is an observed fictional demonstration, not evidence of human preference or improved outcomes.
 
-The final MP4 is **180 seconds**, **1920×1080**, **30 fps**, with H.264 video and stereo AAC audio at 48 kHz. Its 5,400 frames and complete audio track decoded without errors. Review covered the editable browser preview and 96 decoded evidence frames, including scene boundaries; no blank evidence frames were found. All 68 caption groups stay within the film without overlap. The last caption ends at 177.98 seconds, leaving a 2.02-second closing hold.
+Eight actual hosted browser recordings supply the picture. The application fills the frame from the beginning. Retained typing, clicks, scrolling, loading and dialog transitions play at their recorded pace; inactive tool waits and navigation gaps are trimmed. The cursor follows measured pointer positions. One slow focus on the correction dialog returns to the full application before Apply. There are no presentation slides, title bands, or burned-in captions.
 
-Narration uses the requested `gemini-3.1-flash-tts-preview` model and Kore voice. Four generated blocks retain the approved script. Deepgram supplied word timings in one full transcription plus one 7.5-second English excerpt that recovered the word “fifth”; no speech was regenerated for that correction and no word timing was invented. The score and restrained action sounds are original local synthesis. Encoded audio measured −15.77 LUFS integrated, −2.64 dBTP, and zero clipped samples. Audio was measured and transcript-checked, not independently listened to by a human reviewer.
+The final MP4 is **212.800 seconds**, **1920×1080**, **30 fps**, with H.264 video and stereo AAC audio at 48 kHz. All **6,384 frames** and the complete audio stream decoded without errors. Visual review covered the editable browser preview and **109 decoded frames**, including cut boundaries, the correction focus, result states and the ending. The **85 optional English caption cues** stay within the film without overlap. The last cue ends at 210.940 seconds, leaving 1.860 seconds for the music to resolve. Native captions are off by default.
 
-| Published asset | Bytes     | SHA-256                                                            |
-| --------------- | --------- | ------------------------------------------------------------------ |
-| MP4             | 9,856,307 | `fde5672e371f72fe2e5317625967944318f67608b4b02acff15ff2671f771b29` |
-| JPEG poster     | 86,023    | `88300080057487e0e91c3f7a045699fdfcf5dc672125736661dd529f81217af4` |
-| WebVTT captions | 4,525     | `3ceaa3f7ca1778d8cb80af34f3ed9fa3a3b3935486b0757bb7ae640908675b53` |
+The 455-word narration uses `gemini-3.1-flash-tts-preview` with Kore. Four cohesive acts retain the approved story, and Deepgram supplied actual word timings. Quiet gaps were trimmed without changing speech speed. The instrumental score was generated with Lyria; five understated clicks correspond to recorded actions. The final encoded mix measured **−14.03 LUFS integrated** and **−1.14 dBTP**. A full encoded-audio model audition passed intelligibility, continuity, pronunciation, music and ending checks; this was a model opinion, not human listening. Picture review and measured action alignment provide the separate visual evidence.
 
-The separate `tastekeeper-demo` service runs revision `tastekeeper-demo-00001-7x4`, built by `265f41cd-5fa9-483c-94cd-c4387a40282c` from immutable image digest `sha256:2f64c88520a55a67e804ee085a52ccc87bbbc1cd7fa39ebf7dd186c77f99985f`. It uses the dedicated roleless `tastekeeper-film` identity, no secrets, database, mounted volumes or VPC, and minimum zero / maximum one instance. The build context contained exactly eight allowlisted files. All five application service definitions and ready revisions remained unchanged.
+| Published asset |      Bytes | SHA-256                                                            |
+| --------------- | ---------: | ------------------------------------------------------------------ |
+| MP4             | 86,732,845 | `d3c333ddb08abdefc9b621070a7d83cd081fa64c817c95ce21bd61a2a771a6ce` |
+| JPEG poster     |    118,714 | `af2fadfe09913d9e8f987a58b0e9440a4c42e1199c8605fa0fdc30435a0a84ca` |
+| WebVTT captions |      9,502 | `4d3075f321bbe596a521bec3a80aae2715914197d64b98bb4f6386ea473ba68c` |
 
-Anonymous page and health requests returned HTTP 200. All three complete served assets matched the hashes above, with correct MIME types. Video HEAD returned the exact size and a bytes 0–1023 request returned HTTP 206 with the correct `Content-Range`. A fresh browser played the film from the beginning, sought to approximately 110.58 and 125.90 seconds, and displayed the optional native English captions. Playback reported ready state 4 with no media error and zero console errors. Captions were returned to their default off state because the film also includes embedded captions. The private editable project, raw captures, production transcripts and archive were not uploaded. See the [static hosting instructions](../deploy/gcp/media/README.md).
+The separate `tastekeeper-demo` service runs revision `tastekeeper-demo-00002-62t`, built by `34c300a8-cdf7-4b09-b05e-9ee0beba1c56` from immutable image digest `sha256:58603e1798701a1a60b71b97173b0c3ca2b26c48c79fa34d1b94c928e7508c74`. It uses the dedicated roleless `tastekeeper-film` identity, no secrets, database, mounted volumes or VPC, and minimum zero / maximum one instance. The HTTP/2 connection to Nginx supports the full interaction recording. The build context contained exactly eight allowlisted files, with a bounded 128 MiB MP4 limit. All five application service definitions and ready revisions remained unchanged.
+
+Eleven anonymous HTTP checks passed. Page and health requests returned 200. All three complete served assets matched the hashes above, with correct MIME types. Video HEAD returned the exact size; first and last byte ranges returned 206 with correct `Content-Range`, and an unsatisfiable range returned 416. Private capture and audio paths returned 404.
+
+The public native player loaded the 212.800-second, 1920×1080 film at normal speed with captions initially disabled. Playback advanced from 0 to 7 seconds. Seeking to 119.55 seconds loaded the correct correction dialog; subsequent playback from 124.11 through 146 seconds displayed optional English captions. Seeking to 194.07 seconds showed the actual `GRANT_REVOKED` denial at ready state 4 with no media error. Reloading restored the paused opening with captions disabled.
+
+The media workflow also validates shell and Python syntax and the pinned Nginx configuration in CI. The v0.2.0 release notes link the verification run for the published source revision.
+
+The private editable project, raw captures, production transcripts, earlier attempts and history are not uploaded. See the [static hosting instructions](../deploy/gcp/media/README.md).

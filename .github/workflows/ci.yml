@@ -41,6 +41,13 @@ jobs:
         with:
           node-version: 22.22.3
           cache: pnpm
+      - name: Validate static film hosting configuration
+        run: |
+          bash -n deploy/gcp/media/publish.sh deploy/gcp/gcloud.sh
+          python3 -c "import ast; from pathlib import Path; ast.parse(Path('deploy/gcp/media/prepare.py').read_text())"
+          docker run --rm \
+            --volume "$PWD/deploy/gcp/media/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:stable-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951 nginx -t
       - run: pnpm install --frozen-lockfile
       - name: Enable verified TLS for the isolated PostgreSQL service
         env:

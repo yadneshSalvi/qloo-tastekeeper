@@ -12,7 +12,9 @@ This repository contains a guest demo with live-provider and explicitly labelled
 
 _Fictional Mira’s recipient workspace, captured from the hosted application._
 
-[Watch the three-minute demonstration](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app) · [Release evidence](docs/RELEASE.md)
+[Watch the 3:33 demonstration](https://tastekeeper-demo-hqzgkrycbq-uc.a.run.app) · [Release evidence](docs/RELEASE.md)
+
+The film follows one fictional book gift through actual application interactions at their recorded pace, with optional English captions.
 
 ## Try the hosted demo
 
