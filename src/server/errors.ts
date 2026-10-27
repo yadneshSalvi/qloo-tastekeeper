@@ -23,9 +23,16 @@ const messages: Record<string, string> = {
     'The recipient needs to choose at least one current reference for this connection.',
   BUDGET_EXHAUSTED: 'This connection has used all of its permitted choices.',
   UPSTREAM_UNAVAILABLE:
-    'Live Qloo ranking is unavailable. Your brief is preserved; you can explicitly choose the authored sample mode.',
+    'Live ranking is unavailable right now. Your brief is preserved; try again shortly.',
   UNMAPPED_CANDIDATES:
-    'These sample titles have not been verified against Qloo. Live ranking requires confirmed entity mappings.',
+    'This choice needs reviewed reference and catalog identities. Ask the owner to choose verified references.',
+  UPSTREAM_LIMIT:
+    'The live provider allowance is temporarily exhausted. Your brief is preserved; try again later.',
+  UPSTREAM_AUTH: 'The live provider connection needs attention. Your brief is preserved.',
+  CONTEXT_DELETED:
+    'The recipient erased this context. Future requests through this connection have ended.',
+  TIMEOUT:
+    'The live provider did not finish in time. Your brief is preserved; start a new choice to retry.',
   NO_ELIGIBLE_OPTIONS:
     'No catalog options meet these constraints. Adjust your brief and try again.',
   INVITATION_CLAIMED: 'This single-use invitation has already been claimed.',

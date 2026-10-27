@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +20,19 @@ export type ClientConfig = {
 const clientTypes = { books: 'book', media: 'movie', places: 'place' } as const;
 const defaultPorts = { books: 3114, media: 3115, places: 3116 };
 const date = z.string().refine((value) => Number.isFinite(Date.parse(value)));
+const briefSchema = z
+  .object({
+    occasion: z.enum(['birthday', 'thank_you', 'just_because', 'for_me']),
+    note: z.string().trim().max(240).optional(),
+  })
+  .strict();
+const executionSchema = z.object({
+  defaultMode: z.enum(['sample', 'qloo']),
+  qlooAvailable: z.boolean(),
+  agentAvailable: z.boolean(),
+  providerLabel: z.string(),
+  agentLabel: z.string(),
+});
 const publicItem = z.object({
   id: z.string().min(1),
   title: z.string(),
@@ -63,12 +76,24 @@ const sessionViewSchema = z.object({
   grant: grantSchema,
   catalog: catalogSchema,
   delegate: z.object({ displayName: z.string() }),
-  mode: z.literal('authored_sample'),
+  mode: z.enum(['authored_sample', 'qloo']),
+  execution: executionSchema.optional(),
+  latestRunId: z.string().optional(),
+  brief: z
+    .object({
+      hardConstraints: z.record(z.string(), z.union([z.string(), z.number()])),
+      mode: z.enum(['sample', 'qloo']),
+      brief: briefSchema.optional(),
+    })
+    .optional(),
+  runIds: z.array(z.string()).max(40).default([]),
   selections: z
     .array(z.object({ runId: z.string(), itemId: z.string(), title: z.string(), savedAt: date }))
     .default([]),
 });
-const claimResponseSchema = sessionViewSchema.extend({ credential: z.string().min(16) });
+const claimResponseSchema = sessionViewSchema.extend({
+  sessionToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
 const pendingStates = [
   'queued',
   'authorizing',
@@ -89,7 +114,15 @@ const decisionSchema = z.union([
       status: z.enum(['ok', 'partial', 'degraded', 'empty', 'needs_input', 'error']),
       candidateCount: z.number().int(),
       selectedCount: z.number().int(),
+      mappedCount: z.number().int().optional(),
+      unmappedCount: z.number().int().optional(),
+      returnedCount: z.number().int().nonnegative().optional(),
+      agent: z.object({ enabled: z.boolean(), status: z.string(), label: z.string() }).optional(),
     }),
+    explanations: z
+      .array(z.object({ itemId: z.string(), text: z.string().max(600) }))
+      .max(3)
+      .optional(),
     receipt: z.object({
       id: z.string(),
       grantVersion: z.number().int(),
@@ -102,14 +135,15 @@ const decisionSchema = z.union([
 ]);
 type SessionView = z.infer<typeof sessionViewSchema>;
 type ClientSession = {
-  credential: string;
-  credentialExpiresAt: string;
+  sessionToken: string;
   view: SessionView;
   runs: Set<string>;
   latestRunId?: string;
-  lastBrief?: { hardConstraints: Record<string, string | number>; mode: 'sample' | 'qloo' };
-  lastSeen: number;
-  renewing?: Promise<void>;
+  lastBrief?: {
+    hardConstraints: Record<string, string | number>;
+    mode: 'sample' | 'qloo';
+    brief?: z.infer<typeof briefSchema>;
+  };
 };
 
 class ClientError extends Error {
@@ -176,15 +210,53 @@ export function readClientConfig(
   if (new URL(config.publicOrigin).hostname === new URL(config.ownerOrigin).hostname) {
     throw new Error('The client and owner must use separate browser hosts.');
   }
+  if (
+    env.NODE_ENV === 'production' &&
+    [config.publicOrigin, config.gatewayOrigin, config.ownerOrigin].some(
+      (origin) => !origin.startsWith('https://'),
+    )
+  )
+    throw new Error('Production client origins require HTTPS.');
   return config;
 }
 
 /** Independent client backend. Credentials never leave this process. No database access. */
 export function createClientServer(config: ClientConfig) {
-  const sessions = new Map<string, ClientSession>();
   const cookieName = `tastekeeper_${config.clientId}_session`;
-  const assets = new Map<string, Buffer>();
+  const assets = new Map<string, Promise<Buffer>>();
+  const assetPaths: Record<string, { path: URL; type: string }> = {
+    '/client.js': {
+      path: new URL('./client.js', import.meta.url),
+      type: 'application/javascript; charset=utf-8',
+    },
+    '/styles.css': {
+      path: new URL('./styles.css', import.meta.url),
+      type: 'text/css; charset=utf-8',
+    },
+    '/fonts/source-serif-4.woff2': {
+      path: new URL('../public/fonts/source-serif-4.woff2', import.meta.url),
+      type: 'font/woff2',
+    },
+    '/fonts/geist.woff2': {
+      path: new URL('../public/fonts/geist.woff2', import.meta.url),
+      type: 'font/woff2',
+    },
+  };
   const secureCookie = config.publicOrigin.startsWith('https://');
+
+  function assetBytes(path: string): Promise<Buffer> {
+    const asset = assetPaths[path];
+    if (!asset) throw new ClientError(404, 'ASSET_NOT_FOUND', 'This asset is not available.');
+    let bytes = assets.get(path);
+    if (!bytes) {
+      bytes = readFile(asset.path).catch(() => {
+        assets.delete(path);
+        throw new ClientError(404, 'ASSET_NOT_FOUND', 'This asset is not available.');
+      });
+      assets.set(path, bytes);
+    }
+    return bytes;
+  }
 
   function signature(id: string) {
     return createHmac('sha256', config.sessionSecret)
@@ -194,7 +266,7 @@ export function createClientServer(config: ClientConfig) {
   function cookie(value: string, maxAge = 86400) {
     return `${cookieName}=${value}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${maxAge}${secureCookie ? '; Secure' : ''}`;
   }
-  function findSession(req: IncomingMessage) {
+  async function findSession(req: IncomingMessage) {
     const raw = req.headers.cookie
       ?.split(';')
       .map((part) => part.trim())
@@ -224,22 +296,22 @@ export function createClientServer(config: ClientConfig) {
         'This client session has ended. Open a new invitation.',
       );
     }
-    const session = sessions.get(id);
-    if (!session || Date.now() - session.lastSeen > 86_400_000) {
-      sessions.delete(id);
-      throw new ClientError(
-        401,
-        'NO_SESSION',
-        'This client session has ended. Open a new invitation.',
-      );
-    }
-    session.lastSeen = Date.now();
+    const view = validateCatalog(
+      sessionViewSchema.parse(await gateway('/v1/session', { sessionToken: id })),
+    );
+    const session: ClientSession = {
+      sessionToken: id,
+      view,
+      runs: new Set(view.runIds),
+      latestRunId: view.latestRunId,
+      lastBrief: view.brief,
+    };
     return { id, session };
   }
 
   async function gateway(
     path: string,
-    options: { method?: string; body?: unknown; credential?: string } = {},
+    options: { method?: string; body?: unknown; sessionToken?: string } = {},
   ): Promise<unknown> {
     let response: Response;
     try {
@@ -253,7 +325,7 @@ export function createClientServer(config: ClientConfig) {
           'content-type': 'application/json',
           'x-client-id': config.clientId,
           'x-client-secret': config.clientSecret,
-          ...(options.credential ? { authorization: `Bearer ${options.credential}` } : {}),
+          ...(options.sessionToken ? { 'x-client-session': options.sessionToken } : {}),
         },
         ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
       });
@@ -295,44 +367,12 @@ export function createClientServer(config: ClientConfig) {
     return payload;
   }
 
-  async function renew(session: ClientSession) {
-    if (!session.renewing) {
-      session.renewing = (async () => {
-        const fresh = z.object({ credential: z.string().min(16), credentialExpiresAt: date }).parse(
-          await gateway('/v1/credentials/renew', {
-            method: 'POST',
-            body: {},
-            credential: session.credential,
-          }),
-        );
-        session.credential = fresh.credential;
-        session.credentialExpiresAt = fresh.credentialExpiresAt;
-      })().finally(() => {
-        session.renewing = undefined;
-      });
-    }
-    return session.renewing;
-  }
-
   async function authorized(
     session: ClientSession,
     path: string,
     options: { method?: string; body?: unknown } = {},
   ) {
-    if (Date.parse(session.credentialExpiresAt) - Date.now() < 60_000) await renew(session);
-    try {
-      return await gateway(path, { ...options, credential: session.credential });
-    } catch (error) {
-      if (
-        error instanceof ClientError &&
-        error.status === 401 &&
-        ['CREDENTIAL_EXPIRED', 'TOKEN_EXPIRED'].includes(error.code)
-      ) {
-        await renew(session);
-        return gateway(path, { ...options, credential: session.credential });
-      }
-      throw error;
-    }
+    return gateway(path, { ...options, sessionToken: session.sessionToken });
   }
 
   async function body(req: IncomingMessage): Promise<unknown> {
@@ -407,12 +447,24 @@ export function createClientServer(config: ClientConfig) {
       }
 
       if ((req.method === 'GET' || req.method === 'HEAD') && (path === '/' || path === '/claim')) {
+        // Hash the same cached bytes used by the asset routes, including when
+        // HTML and asset requests arrive concurrently during a deployment.
+        const [script, stylesheet] = await Promise.all([
+          assetBytes('/client.js'),
+          assetBytes('/styles.css'),
+        ]);
+        const assetVersions = {
+          script: createHash('sha256').update(script).digest('hex'),
+          stylesheet: createHash('sha256').update(stylesheet).digest('hex'),
+        };
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'private, no-store',
         });
         res.end(
-          req.method === 'HEAD' ? undefined : renderPage(config.clientId, config.ownerOrigin),
+          req.method === 'HEAD'
+            ? undefined
+            : renderPage(config.clientId, config.ownerOrigin, assetVersions),
         );
         return;
       }
@@ -424,35 +476,9 @@ export function createClientServer(config: ClientConfig) {
         });
         return;
       }
-      const assetPaths: Record<string, { path: URL; type: string }> = {
-        '/client.js': {
-          path: new URL('./client.js', import.meta.url),
-          type: 'application/javascript; charset=utf-8',
-        },
-        '/styles.css': {
-          path: new URL('./styles.css', import.meta.url),
-          type: 'text/css; charset=utf-8',
-        },
-        '/fonts/source-serif-4.woff2': {
-          path: new URL('../public/fonts/source-serif-4.woff2', import.meta.url),
-          type: 'font/woff2',
-        },
-        '/fonts/geist.woff2': {
-          path: new URL('../public/fonts/geist.woff2', import.meta.url),
-          type: 'font/woff2',
-        },
-      };
       const asset = assetPaths[path];
       if ((req.method === 'GET' || req.method === 'HEAD') && asset) {
-        let bytes = assets.get(path);
-        if (!bytes) {
-          try {
-            bytes = await readFile(asset.path);
-          } catch {
-            throw new ClientError(404, 'ASSET_NOT_FOUND', 'This asset is not available.');
-          }
-          assets.set(path, bytes);
-        }
+        const bytes = await assetBytes(path);
         res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=3600' });
         res.end(req.method === 'HEAD' ? undefined : bytes);
         return;
@@ -463,50 +489,33 @@ export function createClientServer(config: ClientConfig) {
           .strict()
           .parse(await body(req));
         const claimed = claimResponseSchema.parse(
-          await gateway('/v1/invitations/claim', { method: 'POST', body: input }),
+          await gateway('/v1/browser-sessions/claim', { method: 'POST', body: input }),
         );
-        const { credential, ...publicView } = claimed;
+        const { sessionToken: id, ...publicView } = claimed;
         const view = validateCatalog(publicView);
-        const id = randomBytes(32).toString('base64url');
-        sessions.set(id, {
-          credential,
-          credentialExpiresAt: view.credentialExpiresAt,
-          view,
-          runs: new Set(),
-          lastSeen: Date.now(),
-        });
-        if (sessions.size > 1000) sessions.delete(sessions.keys().next().value!);
         res.setHeader('set-cookie', cookie(`${id}.${signature(id)}`));
         json(res, 200, view);
         return;
       }
       if (req.method === 'GET' && path === '/api/session') {
-        const { session } = findSession(req);
-        const view = validateCatalog(
-          sessionViewSchema.parse(await authorized(session, '/v1/session')),
-        );
-        session.view = view;
-        // A renewal may have happened before this view was requested.
-        session.credentialExpiresAt = view.credentialExpiresAt;
-        json(res, 200, {
-          ...view,
-          ...(session.latestRunId ? { latestRunId: session.latestRunId } : {}),
-          ...(session.lastBrief ? { brief: session.lastBrief } : {}),
-        });
+        const { session } = await findSession(req);
+        const { runIds: _runIds, ...view } = session.view;
+        void _runIds;
+        json(res, 200, view);
         return;
       }
       if (req.method === 'POST' && path === '/api/disconnect') {
         z.object({})
           .strict()
           .parse(await body(req));
-        const { id } = findSession(req);
-        sessions.delete(id);
+        const { session } = await findSession(req);
+        await authorized(session, '/v1/browser-sessions/disconnect', { method: 'POST', body: {} });
         res.setHeader('set-cookie', cookie('', 0));
         json(res, 200, { disconnected: true });
         return;
       }
       if (req.method === 'POST' && path === '/api/decisions') {
-        const { session } = findSession(req);
+        const { session } = await findSession(req);
         const constraintSchemas = {
           books: z
             .object({
@@ -527,10 +536,15 @@ export function createClientServer(config: ClientConfig) {
             hardConstraints: constraintSchemas[config.clientId],
             mode: z.enum(['sample', 'qloo']),
             idempotencyKey: z.string().uuid().optional(),
+            brief: briefSchema.optional(),
           })
           .strict()
           .parse(await body(req));
-        session.lastBrief = { hardConstraints: input.hardConstraints, mode: input.mode };
+        session.lastBrief = {
+          hardConstraints: input.hardConstraints,
+          mode: input.mode,
+          ...(input.brief ? { brief: input.brief } : {}),
+        };
         const { grant, catalog } = session.view;
         const result = z
           .object({
@@ -561,6 +575,7 @@ export function createClientServer(config: ClientConfig) {
                 hardConstraints: input.hardConstraints,
                 idempotencyKey: input.idempotencyKey || randomUUID(),
                 mode: input.mode,
+                ...(input.brief ? { brief: input.brief } : {}),
               },
             }),
           );
@@ -571,7 +586,7 @@ export function createClientServer(config: ClientConfig) {
       }
       const decisionPath = path.match(/^\/api\/decisions\/([A-Za-z0-9_-]{1,128})(\/selection)?$/);
       if (decisionPath) {
-        const { session } = findSession(req);
+        const { session } = await findSession(req);
         const runId = decisionPath[1]!;
         if (!session.runs.has(runId))
           throw new ClientError(
@@ -637,12 +652,6 @@ export function createClientServer(config: ClientConfig) {
       });
     }
   });
-  const cleanup = setInterval(() => {
-    for (const [id, session] of sessions)
-      if (Date.now() - session.lastSeen > 86_400_000) sessions.delete(id);
-  }, 300_000);
-  cleanup.unref();
-  server.on('close', () => clearInterval(cleanup));
   return server;
 }
 

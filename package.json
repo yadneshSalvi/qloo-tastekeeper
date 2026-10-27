@@ -17,6 +17,7 @@
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.ts",
     "qloo:probe": "tsx scripts/qloo-probe.ts",
     "worker": "tsx --env-file=.env.local scripts/worker.ts",
+    "worker:http": "tsx scripts/worker-http.ts",
     "client:books": "tsx --env-file=.env.books.local clients/server.ts",
     "client:media": "tsx --env-file=.env.media.local clients/server.ts",
     "client:places": "tsx --env-file=.env.places.local clients/server.ts",

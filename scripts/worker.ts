@@ -8,7 +8,7 @@ process.on('SIGTERM', () => {
   stopping = true;
 });
 console.log(
-  'TASTEKEEPER durable worker started. Authored sample mode; live requests require explicit configuration.',
+  'TASTEKEEPER durable worker started. Each request uses its explicitly authorized execution mode.',
 );
 while (!stopping) {
   try {

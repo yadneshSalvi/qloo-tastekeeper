@@ -36,6 +36,7 @@ type Workspace = {
   selections: { runId: string; itemId: string }[];
 };
 type SessionView = {
+  execution?: { qlooAvailable: boolean; defaultMode: 'sample' | 'qloo' };
   grant: { id: string };
   delegate: { displayName: string };
   catalog: {
@@ -127,6 +128,8 @@ async function claim(page: Page, claimUrl: string, submit: string) {
   }
   const publicView = (await (await response).json()) as SessionView;
   await expect(page.getByRole('button', { name: submit, exact: false })).toBeVisible();
+  // Functional sample coverage must never spend a live provider call when live is the default.
+  await page.getByRole('button', { name: 'Authored sample', exact: true }).click();
   // Boolean assertions avoid ever printing invitation fragments on a failure.
   expect(Boolean(new URL(page.url()).hash)).toBe(false);
   return publicView;
@@ -308,9 +311,9 @@ for (const clientId of Object.keys(apps) as ClientId[]) {
       contentType: 'image/png',
     });
 
-    if (clientId === 'books') {
+    if (clientId === 'books' && session.execution?.qlooAvailable === false) {
       await page.getByRole('button', { name: /Qloo live/ }).click();
-      await page.getByRole('button', { name: 'Check Qloo live', exact: false }).click();
+      await page.getByRole('button', { name: app.submit, exact: false }).click();
       await expect(
         page.getByRole('heading', { name: 'Qloo live is unavailable.', exact: true }),
       ).toBeVisible();

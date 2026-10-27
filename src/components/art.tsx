@@ -204,12 +204,14 @@ export function ReferenceArt({ id }: { id: string }) {
         </b>
       ) : id === 'ref-city' ? (
         <b>barbican</b>
-      ) : (
+      ) : id === 'ref-community' ? (
         <b>
           A MAN
           <br />
           CALLED OVE
         </b>
+      ) : (
+        <b>✳</b>
       )}
     </div>
   );

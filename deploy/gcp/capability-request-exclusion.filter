@@ -1,0 +1,1 @@
+resource.type="cloud_run_revision" AND resource.labels.service_name=~"^tastekeeper-(web|books|media|places)$" AND log_id("run.googleapis.com/requests") AND httpRequest.requestUrl=~"(?i)(/|%2f)(api|v1|claim|contexts|connections|activity)(/|%2f|[?]|$)|[?]"

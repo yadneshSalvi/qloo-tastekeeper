@@ -4,7 +4,6 @@ import { transaction, type Db } from './db.ts';
 import { bodyDigest, decrypt, digest, encrypt, randomToken } from './crypto.ts';
 import {
   CLIENTS,
-  INVENTORIES,
   REFERENCE_CHOICES,
   availabilityNotice,
   initialSignals,
@@ -16,6 +15,13 @@ import {
 import { PUBLIC_FIELDS, type InvitationInput, type CorrectionInput } from '../domain/contracts.ts';
 import { DomainError, denied } from './errors.ts';
 import type { AuthorizationRecords, PublicField } from '../domain/authorization.ts';
+import {
+  executionCapabilities,
+  mappedCatalog,
+  mapSignals,
+  readMappings,
+  reviewedReferences,
+} from './mappings.ts';
 
 export type Owner = { tenantId: string; ownerId: string };
 export type Principal = {
@@ -24,6 +30,7 @@ export type Principal = {
   delegateId: string;
   tokenHash: string;
   grantId: string;
+  browserSessionHash?: string;
 };
 export type ContextRow = {
   tenant_id: string;
@@ -125,6 +132,7 @@ export async function createDemo(): Promise<Owner & { token: string }> {
   const tenantId = randomUUID(),
     ownerId = randomUUID(),
     token = randomToken();
+  const mappings = readMappings();
   await transaction(tenantId, async (db) => {
     await db.query(
       "INSERT INTO tenants(tenant_id,expires_at) VALUES($1,now()+interval '24 hours')",
@@ -141,6 +149,7 @@ export async function createDemo(): Promise<Owner & { token: string }> {
     for (const clientId of Object.keys(CLIENTS) as ClientId[]) {
       const snapshotId = randomUUID();
       const info = CLIENTS[clientId];
+      const catalog = mappedCatalog(clientId, mappings);
       await db.query('INSERT INTO clients(tenant_id,id) VALUES($1,$2)', [tenantId, clientId]);
       await db.query(
         'INSERT INTO catalog_snapshots(tenant_id,id,client_id,catalog_id,target_type,payload,checksum) VALUES($1,$2,$3,$4,$5,$6,$7)',
@@ -150,8 +159,8 @@ export async function createDemo(): Promise<Owner & { token: string }> {
           clientId,
           info.catalogId,
           info.type,
-          JSON.stringify(INVENTORIES[clientId]),
-          bodyDigest(INVENTORIES[clientId]),
+          JSON.stringify(catalog),
+          bodyDigest(catalog),
         ],
       );
       await db.query(
@@ -176,8 +185,8 @@ export async function createDemo(): Promise<Owner & { token: string }> {
         [
           tenantId,
           id,
-          encrypt(initialSignals(purpose)),
-          'Authored example references; confirmed only within this role-play.',
+          encrypt(mapSignals(initialSignals(purpose), mappings)),
+          'Authored example preferences. Cultural identities are reviewed separately from personal preference claims.',
           ownerId,
         ],
       );
@@ -260,6 +269,7 @@ export async function loadBundle(db: Db, principal: Principal, grantId: string) 
     'SELECT * FROM grants WHERE tenant_id=$1 AND id=$2 FOR UPDATE',
     [t, grantId],
   );
+  if (context.deleted) throw denied('CONTEXT_DELETED', 410);
   const credential = await one<CredentialRow>(
     db,
     'SELECT * FROM credentials WHERE tenant_id=$1 AND token_hash=$2',
@@ -351,14 +361,18 @@ export function publicSession(bundle: Bundle) {
       id: snapshot.catalog_id,
       snapshotId: snapshot.id,
       type: snapshot.target_type,
-      source: 'Publisher and venue reference pages · authored sample catalog',
+      source: 'Publisher and venue reference pages · curated demonstration inventory',
       retrievedAt: snapshot.retrieved_at.toISOString(),
       availabilityNotice,
       items: snapshot.payload.map(publicCatalogItem),
     },
     delegate: { displayName: grant.delegate_name },
     credentialExpiresAt: bundle.credential.expires_at.toISOString(),
-    mode: 'authored_sample' as const,
+    mode:
+      executionCapabilities().defaultMode === 'qloo'
+        ? ('qloo' as const)
+        : ('authored_sample' as const),
+    execution: executionCapabilities(),
   };
 }
 export async function issueCredential(
@@ -461,9 +475,7 @@ export async function createInvitation(owner: Owner, input: InvitationInput) {
       signalCount: scope.signalIds.length,
       snapshotMode: scope.snapshotMode,
     });
-    const origin =
-      process.env[`CLIENT_${input.clientId.toUpperCase()}_ORIGIN`] ??
-      `http://${input.clientId}.localhost:${CLIENTS[input.clientId].port}`;
+    const origin = clientOrigin(input.clientId);
     return {
       id,
       expiresAt: expiry.toISOString(),
@@ -552,7 +564,7 @@ export async function ownerWorkspace(owner: Owner) {
     await assertTenant(db, t);
     const contextRows = (
       await db.query<ContextRow>(
-        'SELECT * FROM contexts WHERE tenant_id=$1 AND owner_id=$2 ORDER BY purpose DESC,created_at,id',
+        'SELECT * FROM contexts WHERE tenant_id=$1 AND owner_id=$2 AND NOT deleted ORDER BY purpose DESC,created_at,id',
         [t, owner.ownerId],
       )
     ).rows;
@@ -567,7 +579,7 @@ export async function ownerWorkspace(owner: Owner) {
     );
     const grants = (
       await db.query<GrantRow & { context_name: string; scope: Scope }>(
-        `SELECT g.*,c.name AS context_name,r.scope FROM grants g JOIN contexts c ON(c.tenant_id=g.tenant_id AND c.id=g.context_id) JOIN grant_revisions r ON(r.tenant_id=g.tenant_id AND r.grant_id=g.id AND r.version=g.version) WHERE g.tenant_id=$1 AND g.owner_id=$2 ORDER BY g.created_at DESC`,
+        `SELECT g.*,c.name AS context_name,r.scope FROM grants g JOIN contexts c ON(c.tenant_id=g.tenant_id AND c.id=g.context_id) JOIN grant_revisions r ON(r.tenant_id=g.tenant_id AND r.grant_id=g.id AND r.version=g.version) WHERE g.tenant_id=$1 AND g.owner_id=$2 AND NOT c.deleted ORDER BY g.created_at DESC`,
         [t, owner.ownerId],
       )
     ).rows.map((g) => ({
@@ -599,7 +611,7 @@ export async function ownerWorkspace(owner: Owner) {
         created_at: Date;
         error_code: string | null;
       }>(
-        `SELECT r.id,r.state,r.client_id,r.context_id,c.name AS context_name,c.revision,r.auth_snapshot,r.result,r.created_at,r.error_code FROM decision_runs r JOIN contexts c ON(c.tenant_id=r.tenant_id AND c.id=r.context_id) WHERE r.tenant_id=$1 AND c.owner_id=$2 ORDER BY r.created_at DESC LIMIT 20`,
+        `SELECT r.id,r.state,r.client_id,r.context_id,c.name AS context_name,c.revision,r.auth_snapshot,r.result,r.created_at,r.error_code FROM decision_runs r JOIN contexts c ON(c.tenant_id=r.tenant_id AND c.id=r.context_id) WHERE r.tenant_id=$1 AND c.owner_id=$2 AND NOT c.deleted ORDER BY r.created_at DESC LIMIT 20`,
         [t, owner.ownerId],
       )
     ).rows.map((r) => ({
@@ -637,18 +649,35 @@ export async function ownerWorkspace(owner: Owner) {
         [t],
       )
     ).rows.map((e) => ({ ...e, createdAt: e.created_at.toISOString() }));
+    const tenant = await one<{ expires_at: Date }>(
+      db,
+      'SELECT expires_at FROM tenants WHERE tenant_id=$1',
+      [t],
+    );
+    const execution = executionCapabilities();
     return {
-      owner: { name: 'Mira', mode: 'isolated_demo' },
+      owner: {
+        name: 'Mira',
+        mode: 'isolated_demo',
+        expiresAt: tenant.expires_at.toISOString(),
+        retentionNotice:
+          'This guest workspace expires after 24 hours. Expired workspaces are erased by scheduled maintenance. You can erase it now; results already shared and provider-side records cannot be recalled.',
+      },
       contexts,
       grants,
       decisions,
       selections,
       events,
+      execution,
+      references: reviewedReferences(),
+      clientOrigins: Object.fromEntries(
+        (Object.keys(CLIENTS) as ClientId[]).map((id) => [id, clientOrigin(id)]),
+      ) as Record<ClientId, string>,
       qloo: {
-        available: false,
-        reason: process.env.QLOO_API_KEY
-          ? 'Verified catalog mappings are still required.'
-          : 'No Qloo API key configured.',
+        available: execution.qlooAvailable,
+        reason: execution.qlooAvailable
+          ? 'Reviewed identities and a separately configured live worker.'
+          : 'Live ranking needs reviewed identity mappings and an enabled worker.',
       },
     };
   });
@@ -797,19 +826,21 @@ export async function createContext(
       'INSERT INTO contexts(tenant_id,id,owner_id,name,purpose) VALUES($1,$2,$3,$4,$5)',
       [owner.tenantId, id, owner.ownerId, input.name, input.purpose],
     );
-    const signals = selected.map((r) => ({
-      ...r,
-      tags: { ...r.tags },
-      active: true,
-      confirmedAt: new Date().toISOString(),
-    }));
+    const signals = mapSignals(
+      selected.map((r) => ({
+        ...r,
+        tags: { ...r.tags },
+        active: true,
+        confirmedAt: new Date().toISOString(),
+      })),
+    );
     await db.query(
       'INSERT INTO context_revisions(tenant_id,context_id,revision,encrypted_signals,reason,author_id) VALUES($1,$2,1,$3,$4,$5)',
       [
         owner.tenantId,
         id,
         encrypt(signals),
-        'Owner confirmed these exact authored sample reference identities.',
+        'Owner confirmed these exact reference identities. Mapping provenance is recorded separately.',
         owner.ownerId,
       ],
     );
@@ -836,3 +867,55 @@ export async function disableClient(owner: Owner, clientId: ClientId) {
   });
 }
 export const fieldsForReceipt = (fields: PublicField[]) => [...fields];
+
+export function clientOrigin(clientId: ClientId) {
+  const value =
+    process.env[`CLIENT_${clientId.toUpperCase()}_ORIGIN`] ??
+    `http://${clientId}.localhost:${CLIENTS[clientId].port}`;
+  const url = new URL(value);
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash
+  )
+    throw new Error('INVALID_CLIENT_ORIGIN');
+  if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:')
+    throw new Error('CLIENT_HTTPS_REQUIRED');
+  return url.origin;
+}
+export async function eraseWorkspace(owner: Owner) {
+  return transaction(owner.tenantId, async (db) => {
+    const owned = await db.query(
+      "SELECT id FROM users WHERE tenant_id=$1 AND id=$2 AND role='owner'",
+      [owner.tenantId, owner.ownerId],
+    );
+    if (!owned.rowCount) throw denied('PRINCIPAL_DENIED');
+    await db.query('SELECT erase_demo_workspace($1)', [owner.tenantId]);
+    return { erased: true };
+  });
+}
+export async function eraseContext(owner: Owner, contextId: string) {
+  return transaction(owner.tenantId, async (db) => {
+    await assertTenant(db, owner.tenantId);
+    const result = await db.query<{ erased: boolean }>(
+      'SELECT erase_context_payloads($1,$2,$3) AS erased',
+      [owner.tenantId, contextId, owner.ownerId],
+    );
+    if (!result.rows[0].erased) throw denied('PRINCIPAL_DENIED', 404);
+    await audit(db, owner.tenantId, 'context.erased', contextId);
+    return { erased: true };
+  });
+}
+export async function endOwnerSession(token: string | undefined) {
+  if (!token) return;
+  const owner = await ownerFromToken(token);
+  await transaction(owner.tenantId, (db) =>
+    db.query('DELETE FROM owner_sessions WHERE token_hash=$1 AND tenant_id=$2', [
+      digest(token),
+      owner.tenantId,
+    ]),
+  );
+}

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import localFont from 'next/font/local';
+import { connection } from 'next/server';
 import './globals.css';
 const sans = localFont({
   src: '../../public/fonts/geist.woff2',
@@ -19,7 +20,9 @@ export const metadata: Metadata = {
     'Share a little context. Keep the rest yours. An isolated sample of recipient-owned gift recommendations and revocable access.',
   robots: { index: false, follow: false },
 };
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Request-bound cookies and SQL must never run during a keyless image build.
+  await connection();
   return (
     <html lang="en" className={`${sans.variable} ${serif.variable}`}>
       <body>

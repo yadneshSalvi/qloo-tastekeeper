@@ -1,0 +1,138 @@
+name: Verify TASTEKEEPER
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: tastekeeper
+          POSTGRES_PASSWORD: local_ci_only
+          POSTGRES_DB: tastekeeper
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tastekeeper -d tastekeeper"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://tastekeeper:local_ci_only@127.0.0.1:5432/tastekeeper
+      APP_ORIGIN: http://127.0.0.1:3104
+      NEXT_TELEMETRY_DISABLED: '1'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.3
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Enable verified TLS for the isolated PostgreSQL service
+        env:
+          TASTEKEEPER_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          tastekeeper_tls="$RUNNER_TEMP/tastekeeper-postgres-tls"
+          mkdir -p "$tastekeeper_tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout "$tastekeeper_tls/server.key" -out "$tastekeeper_tls/server.crt" \
+            -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' > /dev/null 2>&1
+          docker cp "$tastekeeper_tls/server.key" "$TASTEKEEPER_POSTGRES_CONTAINER:/var/lib/postgresql/server.key"
+          docker cp "$tastekeeper_tls/server.crt" "$TASTEKEEPER_POSTGRES_CONTAINER:/var/lib/postgresql/server.crt"
+          docker exec --user root "$TASTEKEEPER_POSTGRES_CONTAINER" chown postgres:postgres /var/lib/postgresql/server.key /var/lib/postgresql/server.crt
+          docker exec --user root "$TASTEKEEPER_POSTGRES_CONTAINER" chmod 600 /var/lib/postgresql/server.key
+          docker exec "$TASTEKEEPER_POSTGRES_CONTAINER" psql -U tastekeeper -d tastekeeper -c "ALTER SYSTEM SET ssl = 'on'"
+          docker exec "$TASTEKEEPER_POSTGRES_CONTAINER" psql -U tastekeeper -d tastekeeper -c "ALTER SYSTEM SET ssl_cert_file = '/var/lib/postgresql/server.crt'"
+          docker exec "$TASTEKEEPER_POSTGRES_CONTAINER" psql -U tastekeeper -d tastekeeper -c "ALTER SYSTEM SET ssl_key_file = '/var/lib/postgresql/server.key'"
+          docker restart "$TASTEKEEPER_POSTGRES_CONTAINER" > /dev/null
+          for attempt in $(seq 1 30); do
+            if docker exec "$TASTEKEEPER_POSTGRES_CONTAINER" pg_isready -U tastekeeper -d tastekeeper > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          echo "DATABASE_CA_FILE=$tastekeeper_tls/server.crt" >> "$GITHUB_ENV"
+      - name: Prepare isolated sample configuration and test database
+        run: |
+          pnpm demo:setup
+          node --input-type=module <<'JS'
+          import pg from 'pg';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const file = '.env.local';
+          writeFileSync(file, readFileSync(file, 'utf8').replace(/^DATABASE_URL=.*$/m, `DATABASE_URL=${process.env.DATABASE_URL}`));
+          const client = new pg.Client({connectionString: process.env.DATABASE_URL});
+          await client.connect();
+          await client.query('CREATE DATABASE tastekeeper_test');
+          await client.end();
+          JS
+      - name: Build without a database credential
+        run: DATABASE_URL= pnpm build
+      - run: pnpm typecheck && pnpm lint && pnpm format:check
+      - run: pnpm test
+      - run: pnpm test:db
+      - run: pnpm db:migrate
+      - name: Create a least-privilege runtime identity
+        run: |
+          node --input-type=module <<'JS'
+          import pg from 'pg';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const client = new pg.Client({connectionString: process.env.DATABASE_URL, ssl: {ca:readFileSync(process.env.DATABASE_CA_FILE,'utf8'),rejectUnauthorized:true}});
+          await client.connect();
+          await client.query("CREATE ROLE tastekeeper_ci_runtime LOGIN PASSWORD 'local_ci_runtime_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS");
+          await client.query('GRANT tastekeeper_runtime TO tastekeeper_ci_runtime');
+          await client.query('GRANT USAGE ON SCHEMA public TO tastekeeper_ci_runtime');
+          await client.end();
+          appendFileSync(process.env.GITHUB_ENV, 'DATABASE_URL=postgresql://tastekeeper_ci_runtime:local_ci_runtime_only@127.0.0.1:5432/tastekeeper\n');
+          JS
+      - name: Smoke the production HTTP worker without provider credentials
+        shell: bash
+        run: |
+          NODE_ENV=production WORKER_AUTH_MODE=cloud-run-iam PORT=3117 node --import tsx scripts/worker-http.ts > /tmp/tastekeeper-ci-http-worker.log 2>&1 &
+          tastekeeper_http_worker_pid=$!
+          trap 'kill "$tastekeeper_http_worker_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3117/health > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3117/health > /dev/null
+          curl --fail --silent --header 'Content-Type: application/json' --data '{}' http://127.0.0.1:3117/tasks/maintenance > /dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Content-Type: application/json' --data '{}' http://127.0.0.1:3117/tasks/decision)" = 400
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Content-Type: application/json' --data '{}' http://127.0.0.1:3117/tasks/reference-search)" = 400
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --data '{}' http://127.0.0.1:3117/tasks/maintenance)" = 415
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Verify independent clients against the production gateway
+        shell: bash
+        run: |
+          pnpm start > /tmp/tastekeeper-ci-web.log 2>&1 &
+          tastekeeper_web_pid=$!
+          pnpm worker > /tmp/tastekeeper-ci-worker.log 2>&1 &
+          tastekeeper_worker_pid=$!
+          pnpm client:books > /tmp/tastekeeper-ci-books.log 2>&1 &
+          tastekeeper_books_pid=$!
+          pnpm client:media > /tmp/tastekeeper-ci-media.log 2>&1 &
+          tastekeeper_media_pid=$!
+          pnpm client:places > /tmp/tastekeeper-ci-places.log 2>&1 &
+          tastekeeper_places_pid=$!
+          trap 'kill "$tastekeeper_web_pid" "$tastekeeper_worker_pid" "$tastekeeper_books_pid" "$tastekeeper_media_pid" "$tastekeeper_places_pid" 2>/dev/null || true' EXIT
+          for tastekeeper_port in 3104 3114 3115 3116; do
+            tastekeeper_health=/health
+            if [ "$tastekeeper_port" = 3104 ]; then tastekeeper_health=/api/health; fi
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent "http://127.0.0.1:$tastekeeper_port$tastekeeper_health" > /dev/null; then break; fi
+              sleep 1
+            done
+            curl --fail --silent "http://127.0.0.1:$tastekeeper_port$tastekeeper_health" > /dev/null
+          done
+          pnpm test:e2e

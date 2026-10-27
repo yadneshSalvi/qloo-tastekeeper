@@ -1,6 +1,6 @@
 # Catalog identity and source notes
 
-Reviewed 24 October 2026. These sources support the identity of the cultural works and places used in the authored demonstration. They are not evidence of Qloo mappings, current availability, partnerships, or recommendation quality. Every `qlooId` remains null until a real identifier is resolved and confirmed.
+Reviewed 24 October 2026. These sources support the identity of the cultural works and places used in the authored demonstration. They are not evidence of current availability, partnerships, or recommendation quality. The committed catalog contains no Qloo identifiers. Operator-reviewed mappings are loaded privately when creating a workspace; live mapping and ranking observations are recorded in [live-observations.md](live-observations.md).
 
 Descriptions, visual studies, preference tags, and sample ranking weights are authored for this application. Book jackets and film/place illustrations are original designs, not licensed publisher or distributor artwork. Source links do not grant permission to reproduce third-party media.
 
@@ -39,3 +39,9 @@ The Tonight client does not assert that any title is included in a particular st
 | St Dunstan in the East | Church garden at St Dunstan's Hill, London EC3R 5DD                                | [City of London garden page](https://www.cityoflondon.gov.uk/things-to-do/city-gardens/find-a-garden/st-dunstan-in-the-east-church-garden). Corrected the old shortened path to this accessible canonical page.                                                                                                                  |
 
 Indoor/outdoor labels are coarse authored planning filters, not weather or accessibility assessments. In particular, Kew includes both outdoor gardens and glasshouses. The reference client must preserve the shared availability notice when displaying or saving any recommendation.
+
+## Cultural identity versus a saleable edition
+
+The reviewed Qloo mapping for _The Art of Gathering_ represents the same work through a hardcover record (ISBN 9781594634925), while this client catalog identifies the paperback (9781594634932). Its cultural ranking is therefore work-level evidence, not edition-specific affinity, price, or availability. The other four reviewed book identities matched their referenced ISBNs. Agnes Martin’s reviewed identity is the painter born in 1912, not the similarly named novelist; her provider taxonomy is `person`. Kew’s mapping identifies the botanical garden, not a restaurant with a similar name.
+
+Owner-entered searches expose a bounded set of Qloo alternatives with identity details and require explicit confirmation. A confirmed identity becomes a new context signal; it cannot silently broaden an existing client grant. The application does not copy raw Qloo records into public catalog pages.

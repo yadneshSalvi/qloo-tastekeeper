@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { claimInvitation } from '@/server/store';
+import { claimBrowserSession, disconnectBrowserSession } from '@/server/client-sessions';
 import { clientSession, queueDecision, releaseDecision, renewCredential } from '@/server/gateway';
 import {
   authenticateClient,
@@ -29,17 +30,25 @@ export async function POST(request: Request, { params }: Route) {
   try {
     const { path } = await params;
     const clientId = authenticateClient(request);
-    if (path.join('/') === 'invitations/claim') {
+    if (path.join('/') === 'invitations/claim' || path.join('/') === 'browser-sessions/claim') {
       await rateLimit(`client:claim:${clientId}`, 60);
       const { token } = z
         .object({ token: z.string().min(30).max(100) })
         .strict()
         .parse(await readBody(request));
-      return json(await claimInvitation(clientId, token));
+      return json(
+        path[0] === 'browser-sessions'
+          ? await claimBrowserSession(clientId, token)
+          : await claimInvitation(clientId, token),
+      );
     }
     const principal = await requirePrincipal(request);
     await rateLimit(`client:write:${principal.tenantId}:${clientId}`, 100);
     const body = await readBody(request);
+    if (path.join('/') === 'browser-sessions/disconnect') {
+      z.object({}).strict().parse(body);
+      return json(await disconnectBrowserSession(principal));
+    }
     if (path.join('/') === 'credentials/renew') {
       z.object({}).strict().parse(body);
       return json(await renewCredential(principal));

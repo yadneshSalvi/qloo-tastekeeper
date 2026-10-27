@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, useMemo, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -27,11 +27,14 @@ import {
   ShieldCheck,
   X,
   Menu,
+  Settings2,
+  Trash2,
 } from 'lucide-react';
 import type { Workspace } from '@/server/store';
 import { CLIENTS, REFERENCE_CHOICES, type ClientId, type Signal } from '@/domain/catalog';
 import { PUBLIC_FIELDS, type CorrectionInput } from '@/domain/contracts';
 import { GiftArt, Mark, ContextArt, ReferenceArt } from './art';
+import { ReferenceSearch } from './reference-search';
 import {
   Badge,
   Button,
@@ -43,11 +46,35 @@ import {
   NavigationDrawer,
 } from './ui';
 
-type Context = Workspace['contexts'][number];
-type Grant = Workspace['grants'][number];
-type Decision = Workspace['decisions'][number];
+type Execution = {
+  defaultMode: 'sample' | 'qloo';
+  qlooAvailable: boolean;
+  agentAvailable: boolean;
+  providerLabel?: string;
+  agentLabel?: string;
+  referenceSearchAvailable?: boolean;
+};
+type ReviewedReference = {
+  id: string;
+  title: string;
+  subtitle: string;
+  type: string;
+  verified?: boolean;
+  verifiedAt?: string;
+  source?: string;
+};
+type WorkspaceData = Workspace & {
+  execution?: Execution;
+  references?: ReviewedReference[];
+  clientOrigins?: Partial<Record<ClientId, string>>;
+  owner: Workspace['owner'] & { expiresAt?: string; retentionNotice?: string };
+};
+type Context = WorkspaceData['contexts'][number];
+type Grant = WorkspaceData['grants'][number];
+type Decision = WorkspaceData['decisions'][number];
 const clientIcons = { books: BookOpen, media: Film, places: MapPin };
-const clientOrigin = (id: ClientId) => `http://${id}.localhost:${CLIENTS[id].port}`;
+const clientOrigin = (id: ClientId, data?: WorkspaceData) =>
+  data?.clientOrigins?.[id] ?? `http://${id}.localhost:${CLIENTS[id].port}`;
 const contextLabel = (c: Context) => (c.purpose === 'gift' ? 'Gift' : 'Personal');
 const prettyTime = (value: string) =>
   new Date(value).toLocaleString('en-GB', {
@@ -58,15 +85,27 @@ const prettyTime = (value: string) =>
     timeZone: 'UTC',
   }) + ' UTC';
 const short = (value: string) => `${value.slice(0, 8)}…`;
-async function api<T>(path: string, body?: unknown): Promise<T> {
+class WorkspaceError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+async function api<T>(path: string, body?: unknown, method?: 'DELETE'): Promise<T> {
   const response = await fetch(`/api/${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error?.message ?? 'This action could not be completed.');
+  const result = response.status === 204 ? {} : await response.json();
+  if (!response.ok)
+    throw new WorkspaceError(
+      result.error?.message ?? 'This action could not be completed.',
+      result.error?.code,
+    );
   return result as T;
 }
 function PageIntro({
@@ -150,7 +189,7 @@ export function WorkspaceApp({
   path,
   requestedClient,
 }: {
-  initialData: Workspace;
+  initialData: WorkspaceData;
   path: string[];
   requestedClient?: ClientId;
 }) {
@@ -164,9 +203,72 @@ export function WorkspaceApp({
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [ending, setEnding] = useState<Grant | null>(null);
   const [endBusy, setEndBusy] = useState(false);
+  const [privacy, setPrivacy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteAck, setDeleteAck] = useState(false);
+  const [syncIssue, setSyncIssue] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const route = path[0] ?? 'home';
-  async function refresh() {
-    setData(await api<Workspace>('workspace'));
+  const pageKey = path.join('/');
+  const refresh = useCallback(async () => {
+    setData(await api<WorkspaceData>('workspace'));
+    setSyncIssue(false);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const check = async () => {
+      if (document.hidden) return;
+      try {
+        const next = await api<WorkspaceData>('workspace');
+        if (active) {
+          setData(next);
+          setSyncIssue(false);
+        }
+      } catch (e) {
+        if (active) {
+          if (
+            e instanceof WorkspaceError &&
+            ['SESSION_REQUIRED', 'SESSION_EXPIRED', 'DEMO_EXPIRED', 'PRINCIPAL_DENIED'].includes(
+              e.code ?? '',
+            )
+          )
+            setSessionEnded(true);
+          else setSyncIssue(true);
+        }
+      }
+    };
+    void check();
+    const interval = window.setInterval(() => void check(), 8000);
+    window.addEventListener('focus', check);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', check);
+    };
+  }, [pageKey]);
+  async function deleteWorkspace() {
+    setDeleting(true);
+    setError('');
+    try {
+      await api('workspace', undefined, 'DELETE');
+      router.replace('/');
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete this demo workspace.');
+      setDeleting(false);
+    }
+  }
+  async function endOwnerSession() {
+    setSigningOut(true);
+    try {
+      await api('logout', {});
+      router.replace('/');
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not end this owner session.');
+      setSigningOut(false);
+    }
   }
   async function openEvidence(id: string) {
     setJournal(false);
@@ -200,6 +302,22 @@ export function WorkspaceApp({
     { href: '/contexts', label: 'Taste contexts', icon: Layers3, key: 'contexts' },
     { href: '/connections', label: 'Connections', icon: Link2, key: 'connections' },
   ];
+
+  if (sessionEnded)
+    return (
+      <main id="main" className="centered-state">
+        <Mark />
+        <span className="eyebrow">A TEMPORARY SPACE</span>
+        <h1>This owner session has ended.</h1>
+        <p>
+          Its stored view is no longer available in this browser. Start a new isolated demo to
+          explore again.
+        </p>
+        <Link className="button button-primary" href="/">
+          Start a new demo space <ArrowRight size={17} />
+        </Link>
+      </main>
+    );
 
   const navigation = (
     <>
@@ -273,6 +391,15 @@ export function WorkspaceApp({
         <Link href="/developers" className="sidebar-help">
           <CircleHelp size={16} /> How TASTEKEEPER works <ArrowUpRight size={13} />
         </Link>
+        <button
+          className="sidebar-help sidebar-privacy"
+          onClick={() => {
+            setMenu(false);
+            setPrivacy(true);
+          }}
+        >
+          <Settings2 size={16} /> Demo ownership & privacy
+        </button>
       </div>
     </>
   );
@@ -308,8 +435,17 @@ export function WorkspaceApp({
             </span>
           </div>
           <div className="topbar-right">
-            <span className="sample-indicator">
-              <span /> ISOLATED SAMPLE
+            <span
+              className={`sample-indicator ${data.execution?.qlooAvailable ? 'live-indicator' : ''}`}
+            >
+              <span />{' '}
+              {data.execution?.qlooAvailable ? (
+                <>
+                  QLOO LIVE<span className="demo-mode-label"> · DEMO</span>
+                </>
+              ) : (
+                'ISOLATED DEMO'
+              )}
             </span>
             <button
               className="icon-button"
@@ -324,6 +460,18 @@ export function WorkspaceApp({
           </div>
         </header>
         <main id="main" tabIndex={-1} className="workspace-content">
+          {syncIssue && (
+            <div className="sync-notice" role="status">
+              <RefreshCw size={16} />
+              <span>This view could not refresh. Your last saved state is shown.</span>
+              <button
+                className="text-button"
+                onClick={() => void refresh().catch(() => setSyncIssue(true))}
+              >
+                Try again
+              </button>
+            </div>
+          )}
           {notice && (
             <div className="notice" role="status">
               <CheckCheck size={19} />
@@ -353,6 +501,7 @@ export function WorkspaceApp({
           {route === 'gifts' && <GiftWizard data={data} onCreated={refresh} />}
           {route === 'contexts' && path[1] === 'new' && (
             <NewContext
+              references={data.references}
               onCreated={async (id) => {
                 await refresh();
                 router.push(`/contexts/${id}`);
@@ -384,7 +533,9 @@ export function WorkspaceApp({
           <div className="workspace-footnote">
             <LockKeyhole size={14} />
             <span>
-              Authored sample choices. Real permission checks.{' '}
+              {data.execution?.qlooAvailable
+                ? 'Live Qloo available. Real permission checks. '
+                : 'Explicit modes. Real permission checks. '}
               <Link href="/developers">What this demo does</Link>
             </span>
           </div>
@@ -409,6 +560,62 @@ export function WorkspaceApp({
         onConfirm={endAccess}
         busy={endBusy}
       />
+      <Modal
+        open={privacy}
+        onOpenChange={setPrivacy}
+        title="Your demo space, clearly owned."
+        description="You are acting as Mira, the example recipient. This browser controls this isolated owner workspace."
+      >
+        <div className="retention-card">
+          <Clock3 size={22} />
+          <div>
+            <strong>A temporary space for a real flow.</strong>
+            <p>
+              {data.owner.retentionNotice ??
+                'This isolated demonstration stores your approved contexts, invitations, decisions, and saved choices.'}
+            </p>
+            {data.owner.expiresAt && (
+              <p className="field-note">Workspace expires {prettyTime(data.owner.expiresAt)}.</p>
+            )}
+          </div>
+        </div>
+        <p className="field-note">
+          The client apps use separate sessions. Invitation claims identify a role in this demo;
+          they do not verify a real person. Deleting this space ends its authorizations and removes
+          its stored records. Previously shared results cannot be recalled.
+        </p>
+        <label className="checkbox-line delete-ack">
+          <input
+            type="checkbox"
+            checked={deleteAck}
+            onChange={(event) => setDeleteAck(event.target.checked)}
+          />
+          <span>Delete this demo workspace and end all its connections.</span>
+        </label>
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => setPrivacy(false)}>
+            Keep exploring
+          </Button>
+          <Button variant="danger" busy={deleting} disabled={!deleteAck} onClick={deleteWorkspace}>
+            <Trash2 size={16} /> Delete demo workspace
+          </Button>
+        </div>
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="owner-session-exit">
+          <p>
+            Leaving signs out this browser. Existing invitations and records remain until expiry.
+            This demo has no account recovery; use deletion above to erase the space and end its
+            connections.
+          </p>
+          <Button variant="ghost" busy={signingOut} onClick={endOwnerSession}>
+            End this owner session <ArrowUpRight size={15} />
+          </Button>
+        </div>
+      </Modal>
       <EvidenceDrawer open={journal} onOpenChange={setJournal} title="Your access journal">
         <div className="evidence-callout">
           This is an audit of permission and actions. It is not a measurement of recommendation
@@ -421,7 +628,7 @@ export function WorkspaceApp({
               <strong>
                 {(
                   {
-                    'workspace.created': 'Your sample space was created',
+                    'workspace.created': 'Your isolated space was created',
                     'invitation.created': 'An invitation was approved',
                     'invitation.claimed': 'An invitation was claimed',
                     'decision.queued': 'A choice was requested',
@@ -439,7 +646,14 @@ export function WorkspaceApp({
             </div>
           </div>
         ))}
-        <Button variant="secondary" onClick={() => refresh()}>
+        <Button
+          variant="secondary"
+          onClick={() =>
+            void refresh().catch((e) =>
+              setError(e instanceof Error ? e.message : 'Could not refresh the journal.'),
+            )
+          }
+        >
           Refresh journal <RefreshCw size={15} />
         </Button>
       </EvidenceDrawer>
@@ -460,7 +674,7 @@ export function WorkspaceApp({
   );
 }
 
-function HomePage({ data, onEvidence }: { data: Workspace; onEvidence: (id: string) => void }) {
+function HomePage({ data, onEvidence }: { data: WorkspaceData; onEvidence: (id: string) => void }) {
   return (
     <>
       <div className="greeting">
@@ -489,7 +703,7 @@ function HomePage({ data, onEvidence }: { data: Workspace; onEvidence: (id: stri
           </Link>
           <div className="hero-assurance">
             <ShieldCheck size={15} />
-            <span>Your references stay in your space.</span>
+            <span>Your references stay out of the giver’s results.</span>
           </div>
         </div>
         <div className="hero-art">
@@ -497,6 +711,28 @@ function HomePage({ data, onEvidence }: { data: Workspace; onEvidence: (id: stri
           <GiftArt />
         </div>
       </section>
+      <div className="journey-strip" aria-label="The gift journey">
+        <div>
+          <span>01</span>
+          <p>
+            <strong>You set the scope</strong>Choose references for this occasion.
+          </p>
+        </div>
+        <ArrowRight size={16} aria-hidden="true" />
+        <div>
+          <span>02</span>
+          <p>
+            <strong>They discover a gift</strong>Public choices, with your references kept private.
+          </p>
+        </div>
+        <ArrowRight size={16} aria-hidden="true" />
+        <div>
+          <span>03</span>
+          <p>
+            <strong>You stay in control</strong>Correct a reference or end future access.
+          </p>
+        </div>
+      </div>
       <section className="dashboard-section">
         <div className="section-row">
           <div>
@@ -653,7 +889,7 @@ function DecisionRow({
   );
 }
 
-function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Promise<void> }) {
+function GiftWizard({ data, onCreated }: { data: WorkspaceData; onCreated: () => Promise<void> }) {
   const contexts = data.contexts.filter((c) => c.purpose === 'gift');
   const [contextId, setContextId] = useState(contexts[0]?.id ?? '');
   const context = contexts.find((c) => c.id === contextId);
@@ -705,7 +941,7 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
       setCopied(true);
     } catch {
       setError(
-        'Clipboard access is unavailable. Use Open as Alex to continue in this local sample.',
+        'Clipboard access is unavailable. Use the invitation button to open the giver’s separate session.',
       );
     }
   }
@@ -758,7 +994,7 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
         <div className="roleplay-note">
           <ShieldCheck size={18} />
           <p>
-            <strong>You’re trying both sides of an isolated sample.</strong> Opening the invitation
+            <strong>You’re trying both sides of an isolated demo.</strong> Opening the invitation
             switches to a separate client session as the example giver. It does not verify a real
             person’s identity.
           </p>
@@ -783,13 +1019,26 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
       <div className="wizard-steps" aria-label={`Step ${step} of 3`}>
         {['Choose a little context', 'Make the invitation', 'Review & allow'].map(
           (label, index) => (
-            <div key={label} className={step >= index + 1 ? 'current' : ''}>
+            <div
+              key={label}
+              className={step >= index + 1 ? 'current' : ''}
+              aria-current={step === index + 1 ? 'step' : undefined}
+            >
               <span>{step > index + 1 ? <Check size={15} /> : index + 1}</span>
               <strong>{label}</strong>
             </div>
           ),
         )}
       </div>
+      <p className="sr-only" role="status">
+        Step {step} of 3:{' '}
+        {step === 1
+          ? 'Choose a little context'
+          : step === 2
+            ? 'Make the invitation'
+            : 'Review and allow'}
+        .
+      </p>
       <div className="wizard-layout">
         <div className="wizard-main">
           <div className="panel">
@@ -817,8 +1066,8 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                 {step === 1 && (
                   <>
                     <p className="muted">
-                      Choose which references this connection may use. These titles stay in your
-                      recipient workspace.
+                      Choose which references this connection may use. These titles stay out of the
+                      giver’s results.
                     </p>
                     <label className="field-label" htmlFor="gift-context">
                       Gift context
@@ -873,15 +1122,21 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                         ))}
                     </div>
                     <p className="field-note">
-                      {signals.length} of 10 permitted references selected · authored example
-                      identities
+                      {signals.length} of 10 permitted references selected. Choose the exact
+                      references for this invitation.
                     </p>
+                    {signals.length > 10 && (
+                      <p className="inline-error" role="alert">
+                        Select at most 10 references before continuing. None will be dropped for
+                        you.
+                      </p>
+                    )}
                   </>
                 )}
                 {step === 2 && (
                   <>
                     <p className="muted">
-                      This local sample uses an example giver. You remain the example recipient,
+                      This isolated demo uses an example giver. You remain the example recipient,
                       Mira.
                     </p>
                     <label className="field-label" htmlFor="delegate-name">
@@ -918,9 +1173,9 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                           value={limit}
                           onChange={(e) => setLimit(Number(e.target.value))}
                         >
-                          <option value={1}>1 thoughtful choice</option>
-                          <option value={3}>Up to 3 choices</option>
-                          <option value={10}>Up to 10 choices</option>
+                          <option value={1}>1 request</option>
+                          <option value={3}>Up to 3 requests</option>
+                          <option value={10}>Up to 10 requests</option>
                         </select>
                       </div>
                     </div>
@@ -928,7 +1183,7 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                       <ClientEmblem clientId="books" />
                       <div>
                         <strong>The Reading Room</strong>
-                        <span>Book suggestions · fixed sample catalog · 5 editions</span>
+                        <span>Book suggestions · a fixed, named inventory</span>
                       </div>
                       <LockKeyhole size={17} />
                     </div>
@@ -971,9 +1226,19 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                       <div>
                         <span className="mini-label">WHAT {name.toUpperCase()} CAN SEE</span>
                         <CheckLine>Titles, creators & public descriptions</CheckLine>
-                        <CheckLine>Official links & sample budgets</CheckLine>
+                        <CheckLine>Public source links & illustrative amounts</CheckLine>
                         <CheckLine>A permission receipt, without references</CheckLine>
+                        <CheckLine>Generic explanations from public item facts</CheckLine>
                       </div>
+                    </div>
+                    <div className="provider-consent">
+                      <span className="mini-label">HOW THE PROVIDERS HELP</span>
+                      <p>
+                        In live mode, Qloo receives your approved cultural IDs and candidate IDs to
+                        find affinity. When AI explanations are enabled, the AI provider receives
+                        public catalog facts and the giver’s brief. Your private references and
+                        profile are excluded from the AI prompt.
+                      </p>
                     </div>
                     <div className="privacy-statement">
                       <LockKeyhole size={19} />
@@ -1000,7 +1265,13 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                 )}
                 <div className="wizard-actions">
                   {step > 1 ? (
-                    <Button variant="secondary" onClick={() => setStep(step - 1)}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setAck(false);
+                        setStep(step - 1);
+                      }}
+                    >
                       Back
                     </Button>
                   ) : (
@@ -1010,8 +1281,13 @@ function GiftWizard({ data, onCreated }: { data: Workspace; onCreated: () => Pro
                   )}
                   {step < 3 ? (
                     <Button
-                      onClick={() => setStep(step + 1)}
-                      disabled={step === 1 ? signals.length === 0 : !name.trim()}
+                      onClick={() => {
+                        setAck(false);
+                        setStep(step + 1);
+                      }}
+                      disabled={
+                        step === 1 ? signals.length === 0 || signals.length > 10 : !name.trim()
+                      }
                     >
                       Continue <ArrowRight size={16} />
                     </Button>
@@ -1052,10 +1328,11 @@ function ContextsPage({
   selectedId,
   onChange,
 }: {
-  data: Workspace;
+  data: WorkspaceData;
   selectedId?: string;
   onChange: (message: string) => Promise<void>;
 }) {
+  const router = useRouter();
   const [correcting, setCorrecting] = useState<{ context: Context; signal: Signal } | null>(null);
   const [reason, setReason] = useState<CorrectionInput['reason']>('no_longer_interested');
   const [preview, setPreview] = useState<{
@@ -1065,7 +1342,29 @@ function ContextsPage({
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const [erasing, setErasing] = useState(false);
+  const [eraseAck, setEraseAck] = useState(false);
+  const [eraseBusy, setEraseBusy] = useState(false);
+  const [referenceSearchOpen, setReferenceSearchOpen] = useState(false);
   const context = data.contexts.find((c) => c.id === selectedId);
+  async function eraseContext() {
+    if (!context) return;
+    setEraseBusy(true);
+    setError('');
+    try {
+      await api(`contexts/${context.id}`, undefined, 'DELETE');
+      await onChange(
+        `Deleted ${context.name}. Its future requests are blocked. Other contexts were not changed.`,
+      );
+      setErasing(false);
+      router.push('/contexts');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete this context.');
+    } finally {
+      setEraseBusy(false);
+    }
+  }
   const request = () => ({
     contextId: correcting!.context.id,
     expectedRevision: correcting!.context.revision,
@@ -1079,6 +1378,7 @@ function ContextsPage({
       setPreview(await api('corrections/preview', request()));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not preview this correction.');
+      setConflict(e instanceof WorkspaceError && e.code === 'CORRECTION_CONFLICT');
     } finally {
       setBusy(false);
     }
@@ -1096,6 +1396,7 @@ function ContextsPage({
       setPreview(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not apply this correction.');
+      setConflict(e instanceof WorkspaceError && e.code === 'CORRECTION_CONFLICT');
     } finally {
       setBusy(false);
     }
@@ -1104,6 +1405,7 @@ function ContextsPage({
     setCorrecting({ context: c, signal });
     setPreview(null);
     setError('');
+    setConflict(false);
   }
   return (
     <>
@@ -1168,11 +1470,16 @@ function ContextsPage({
             <section className="panel">
               <div className="section-row">
                 <h2>What this context uses</h2>
-                <Badge>{context.signals.filter((s) => s.active).length} active references</Badge>
+                <div className="reference-section-actions">
+                  <Badge>{context.signals.filter((s) => s.active).length} active references</Badge>
+                  <Button variant="secondary" onClick={() => setReferenceSearchOpen(true)}>
+                    <Plus size={16} /> Find a reference
+                  </Button>
+                </div>
               </div>
               <p className="muted">
-                An authored reference library for this sample. You can explicitly remove a signal
-                and see future recommendations change.
+                These references guide future queries. Preview each correction before applying it;
+                no feedback silently edits your context.
               </p>
               <div className="reference-detail-list">
                 {context.signals.map((signal) => (
@@ -1186,7 +1493,12 @@ function ContextsPage({
                       <span>{signal.subtitle}</span>
                       <small>
                         {signal.active
-                          ? 'Confirmed reference · sample identity'
+                          ? data.references?.find((reference) => reference.id === signal.id)
+                              ?.verified
+                            ? 'Reviewed Qloo identity'
+                            : signal.entityId.startsWith('sample:')
+                              ? 'Authored example reference'
+                              : 'Owner-confirmed cultural identity'
                           : 'Removed from future decisions'}
                       </small>
                     </div>
@@ -1234,8 +1546,61 @@ function ContextsPage({
                   candidate results.
                 </p>
               </div>
+              <button
+                className="text-button danger-text context-delete"
+                onClick={() => {
+                  setEraseAck(false);
+                  setError('');
+                  setErasing(true);
+                }}
+              >
+                <Trash2 size={15} /> Delete this context
+              </button>
             </aside>
           </div>
+          {data.decisions.some((decision) => decision.contextId === context.id) && (
+            <section className="panel context-history">
+              <div className="section-row">
+                <div>
+                  <span className="eyebrow">A CONTEXT WITH A HISTORY</span>
+                  <h2>Choices across revisions</h2>
+                </div>
+                <Link href="/decisions" className="text-link">
+                  View all choices <ArrowRight size={15} />
+                </Link>
+              </div>
+              <p className="muted">
+                Earlier choices remain visible. A new request uses the current references and
+                repeats authorization.
+              </p>
+              {data.decisions
+                .filter((decision) => decision.contextId === context.id)
+                .slice(0, 4)
+                .map((decision) => (
+                  <Link
+                    className="revision-decision"
+                    key={decision.id}
+                    href={`/decisions/${decision.id}`}
+                  >
+                    <span className={`revision-marker ${decision.stale ? 'is-stale' : ''}`}>
+                      v{decision.contextRevision}
+                    </span>
+                    <span>
+                      <strong>
+                        {decision.items[0]?.title ?? 'A request without a released choice'}
+                      </strong>
+                      <small>
+                        {CLIENTS[decision.clientId].name} · {prettyTime(decision.createdAt)}
+                      </small>
+                    </span>
+                    <Badge tone={decision.stale ? 'amber' : 'green'}>
+                      {decision.stale ? 'Earlier context' : 'Current context'}
+                    </Badge>
+                    <ArrowUpRight size={16} />
+                  </Link>
+                ))}
+            </section>
+          )}
         </>
       )}
       <Modal
@@ -1297,6 +1662,20 @@ function ContextsPage({
                     {correcting.context.purpose === 'personal' ? 'Gift' : 'Personal'} remains
                     unchanged.
                   </CheckLine>
+                  <div className="correction-query-preview">
+                    <span className="mini-label">THE NEXT QUERY</span>
+                    <p>
+                      <strong>Remove:</strong> {correcting.signal.title}
+                    </p>
+                    <p>
+                      <strong>Keep:</strong> the same approved client, purpose, catalog, and public
+                      output fields.
+                    </p>
+                    <small>
+                      The next choice can change. This preview does not predict the provider’s
+                      result.
+                    </small>
+                  </div>
                   {preview.remaining === 0 && (
                     <p className="inline-error">
                       Connected clients will need a new permission with active references before
@@ -1320,18 +1699,83 @@ function ContextsPage({
               <Button variant="secondary" onClick={() => setCorrecting(null)}>
                 Keep it as it is
               </Button>
-              <Button busy={busy} onClick={preview ? apply : checkCorrection}>
-                {preview ? 'Apply to this context' : 'Preview correction'} <ArrowRight size={16} />
-              </Button>
+              {conflict ? (
+                <Button
+                  onClick={async () => {
+                    setCorrecting(null);
+                    await onChange(
+                      'The context was refreshed. Review the latest revision before correcting it.',
+                    );
+                  }}
+                >
+                  Review latest context <RefreshCw size={16} />
+                </Button>
+              ) : (
+                <Button busy={busy} onClick={preview ? apply : checkCorrection}>
+                  {preview ? 'Apply to this context' : 'Preview correction'}{' '}
+                  <ArrowRight size={16} />
+                </Button>
+              )}
             </div>
           </>
         )}
+      </Modal>
+      {context && (
+        <ReferenceSearch
+          key={context.id}
+          open={referenceSearchOpen}
+          onOpenChange={setReferenceSearchOpen}
+          context={context}
+          available={
+            data.execution?.referenceSearchAvailable ?? data.execution?.qlooAvailable ?? false
+          }
+          onChanged={onChange}
+        />
+      )}
+      <Modal
+        open={erasing}
+        onOpenChange={setErasing}
+        title="Delete this taste context?"
+        description="Its references, saved choices, and stored decision content will be erased. Future requests through its connections will be blocked. Other contexts stay as they are."
+      >
+        <p className="field-note">
+          Previously shared results and provider-side records cannot be recalled. This action cannot
+          be undone.
+        </p>
+        <label className="checkbox-line delete-ack">
+          <input
+            type="checkbox"
+            checked={eraseAck}
+            onChange={(event) => setEraseAck(event.target.checked)}
+          />
+          <span>Delete {context?.name ?? 'this context'} and end its future access.</span>
+        </label>
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => setErasing(false)}>
+            Keep this context
+          </Button>
+          <Button variant="danger" busy={eraseBusy} disabled={!eraseAck} onClick={eraseContext}>
+            <Trash2 size={16} /> Delete context
+          </Button>
+        </div>
       </Modal>
     </>
   );
 }
 
-function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> }) {
+function NewContext({
+  references,
+  onCreated,
+}: {
+  references?: ReviewedReference[];
+  onCreated: (id: string) => Promise<void>;
+}) {
+  const library: readonly ReviewedReference[] = references ?? REFERENCE_CHOICES;
   const [name, setName] = useState('A few favourites');
   const [purpose, setPurpose] = useState<'personal' | 'gift'>('personal');
   const [selected, setSelected] = useState<string[]>([]);
@@ -1342,12 +1786,12 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
   const [error, setError] = useState('');
   const results = useMemo(
     () =>
-      REFERENCE_CHOICES.filter(
+      library.filter(
         (r) =>
           (type === 'all' || r.type === type) &&
           `${r.title} ${r.subtitle}`.toLowerCase().includes(query.toLowerCase()),
       ),
-    [query, type],
+    [query, type, library],
   );
   async function create() {
     setBusy(true);
@@ -1374,7 +1818,7 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
         title={review ? 'These are the ones you mean.' : 'What do you return to?'}
         description={
           review
-            ? 'Confirm the exact titles, creators, and places before you add them to this sample context.'
+            ? 'Confirm the exact titles, creators, and places before you add them to this context.'
             : 'A book you linger over. A film you return to. A place that stays with you. Start with a few cultural references.'
         }
       />
@@ -1409,7 +1853,7 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
           {!review ? (
             <>
               <label className="field-label" htmlFor="reference-search">
-                Find a reference in the sample library
+                Find a reference in the quickstart library
               </label>
               <input
                 id="reference-search"
@@ -1450,10 +1894,14 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
                       )
                     }
                     aria-pressed={selected.includes(r.id)}
+                    disabled={!selected.includes(r.id) && selected.length >= 10}
                   >
                     <ReferenceArt id={r.id} />
                     <strong>{r.title}</strong>
                     <span>{r.subtitle}</span>
+                    <span className={`reference-verification ${r.verified ? 'verified' : ''}`}>
+                      {r.verified ? 'Reviewed Qloo identity' : 'Authored example identity'}
+                    </span>
                     <span className="library-add">
                       {selected.includes(r.id) ? (
                         <>
@@ -1471,23 +1919,25 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
               {results.length === 0 && (
                 <Empty
                   icon={<BookOpen size={24} />}
-                  title="No match in this sample library"
-                  description="Try another title or clear your search. Live Qloo search is not connected."
+                  title="No match in this reviewed library"
+                  description="Try another title or clear your search. This is a bounded library of reviewed identities; it does not search every Qloo entity."
                 />
               )}
             </>
           ) : (
             <div className="reference-detail-list">
-              {REFERENCE_CHOICES.filter((r) => selected.includes(r.id)).map((r) => (
-                <div className="reference-detail" key={r.id}>
-                  <ReferenceArt id={r.id} />
-                  <div>
-                    <strong>{r.title}</strong>
-                    <span>{r.subtitle}</span>
+              {library
+                .filter((r) => selected.includes(r.id))
+                .map((r) => (
+                  <div className="reference-detail" key={r.id}>
+                    <ReferenceArt id={r.id} />
+                    <div>
+                      <strong>{r.title}</strong>
+                      <span>{r.subtitle}</span>
+                    </div>
+                    <Check size={20} />
                   </div>
-                  <Check size={20} />
-                </div>
-              ))}
+                ))}
             </div>
           )}
           {error && (
@@ -1496,7 +1946,7 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
             </p>
           )}
           <div className="wizard-actions">
-            <span className="field-note">{selected.length} references selected</span>
+            <span className="field-note">{selected.length} of 10 references selected</span>
             {review ? (
               <>
                 <Button variant="secondary" onClick={() => setReview(false)}>
@@ -1524,8 +1974,9 @@ function NewContext({ onCreated }: { onCreated: (id: string) => Promise<void> })
             <em>clearly chosen.</em>
           </h3>
           <p>
-            This library contains authored sample identities. Live entity search and Qloo
-            disambiguation require a key and verified mappings.
+            Start with this curated quickstart library. Reviewed Qloo identities are labeled;
+            authored examples remain explicit. After creating your context, use “Find a reference”
+            to search live Qloo identities when available. Nothing is added until you confirm it.
           </p>
           <CheckLine>No account scraping</CheckLine>
           <CheckLine>No inferred personal traits</CheckLine>
@@ -1543,7 +1994,7 @@ function ConnectionsPage({
   onCreated,
   requestedClient,
 }: {
-  data: Workspace;
+  data: WorkspaceData;
   selectedId?: string;
   onEnd: (grant: Grant) => void;
   onCreated: () => Promise<void>;
@@ -1637,14 +2088,14 @@ function ConnectionsPage({
                 </div>
                 <div>
                   <dt>Public fields</dt>
-                  <dd>Title, creator, description, source link, sample budget</dd>
+                  <dd>Title, creator, description, source link, illustrative amount</dd>
                 </div>
                 <div>
                   <dt>Expires</dt>
                   <dd>{prettyTime(selected.expiresAt)}</dd>
                 </div>
                 <div>
-                  <dt>Choices remaining</dt>
+                  <dt>Requests remaining</dt>
                   <dd>{selected.remainingRequests}</dd>
                 </div>
               </dl>
@@ -1673,7 +2124,7 @@ function ConnectionsPage({
                 This grant cannot be combined with another grant to gain broader access. It
                 authorizes one context, one client, and one purpose.
               </p>
-              <ExternalLink href={clientOrigin(selected.clientId)}>
+              <ExternalLink href={clientOrigin(selected.clientId, data)}>
                 Open {selected.clientName}
               </ExternalLink>
             </aside>
@@ -1724,7 +2175,7 @@ function ConnectionsPage({
                         {grant.delegateName} · {grant.contextName}
                       </span>
                       <small>
-                        {grant.remainingRequests} choices left · ends {prettyTime(grant.expiresAt)}
+                        {grant.remainingRequests} requests left · ends {prettyTime(grant.expiresAt)}
                       </small>
                     </div>
                     <Status status={grant.status} />
@@ -1804,6 +2255,7 @@ function ConnectionsPage({
                   id="personal-context"
                   value={contextId}
                   onChange={(e) => {
+                    setAck(false);
                     setContextId(e.target.value);
                     setSignals(
                       data.contexts
@@ -1830,13 +2282,14 @@ function ConnectionsPage({
                         <input
                           type="checkbox"
                           checked={signals.includes(s.id)}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            setAck(false);
                             setSignals(
                               e.target.checked
                                 ? [...signals, s.id]
                                 : signals.filter((id) => id !== s.id),
-                            )
-                          }
+                            );
+                          }}
                         />
                         <span>
                           {s.title}
@@ -1845,6 +2298,13 @@ function ConnectionsPage({
                       </label>
                     ))}
                 </div>
+                <p className="field-note">{signals.length} of 10 permitted references selected.</p>
+                {signals.length > 10 && (
+                  <p className="inline-error" role="alert">
+                    Choose the 10 references this connection may use. None will be dropped
+                    automatically.
+                  </p>
+                )}
                 <dl className="consent-summary">
                   <div>
                     <dt>Purpose</dt>
@@ -1852,7 +2312,7 @@ function ConnectionsPage({
                   </div>
                   <div>
                     <dt>Catalog</dt>
-                    <dd>{CLIENTS[connecting].catalogId} · 5 options</dd>
+                    <dd>{CLIENTS[connecting].catalogId} · a named public inventory</dd>
                   </div>
                   <div>
                     <dt>Fields</dt>
@@ -1867,11 +2327,14 @@ function ConnectionsPage({
                   <input
                     type="checkbox"
                     checked={follow}
-                    onChange={(e) => setFollow(e.target.checked)}
+                    onChange={(e) => {
+                      setAck(false);
+                      setFollow(e.target.checked);
+                    }}
                   />
                   <span>
                     Allow future snapshots within this named catalog.
-                    <small>Unchecked keeps this permission pinned to the current 5 options.</small>
+                    <small>Unchecked keeps this permission pinned to its current inventory.</small>
                   </span>
                 </label>
                 <div className="privacy-statement">
@@ -1879,6 +2342,15 @@ function ConnectionsPage({
                   <p>
                     The client receives candidate decisions and public facts. Suggestions may reveal
                     preferences. Previously released answers cannot be recalled.
+                  </p>
+                </div>
+                <div className="provider-consent">
+                  <span className="mini-label">PROVIDER SCOPE</span>
+                  <p>
+                    Live Qloo receives the selected cultural IDs and approved candidate IDs. An
+                    enabled AI explanation uses only public catalog facts and the client’s brief.
+                    Private references and profiles are excluded from the AI prompt. The client can
+                    receive a generic public explanation alongside permitted item facts.
                   </p>
                 </div>
                 <label className="checkbox-line consent-check">
@@ -1894,7 +2366,11 @@ function ConnectionsPage({
                   <Button variant="secondary" onClick={() => setConnecting(null)}>
                     Cancel
                   </Button>
-                  <Button busy={busy} disabled={!ack || !signals.length} onClick={allow}>
+                  <Button
+                    busy={busy}
+                    disabled={!ack || !signals.length || signals.length > 10}
+                    onClick={allow}
+                  >
                     Allow this choice <ArrowRight size={16} />
                   </Button>
                 </div>
@@ -1912,7 +2388,7 @@ function DecisionsPage({
   selectedId,
   onEvidence,
 }: {
-  data: Workspace;
+  data: WorkspaceData;
   selectedId?: string;
   onEvidence: (id: string) => void;
 }) {
@@ -1965,7 +2441,7 @@ function DecisionsPage({
                 <span>
                   {d.provenance?.label ?? 'Awaiting a result'} · {prettyTime(d.createdAt)}
                 </span>
-                <ExternalLink href={clientOrigin(d.clientId)}>
+                <ExternalLink href={clientOrigin(d.clientId, data)}>
                   Return to {CLIENTS[d.clientId].name}
                 </ExternalLink>
               </div>
@@ -1978,6 +2454,17 @@ function DecisionsPage({
 }
 function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
   const refs = evidence.selectedReferences as { id: string; title: string }[] | undefined;
+  const qloo = evidence.qloo as { returnedCount?: number; sentCandidateCount?: number } | undefined;
+  const agent = evidence.agent as
+    | { requestCount?: number; toolSteps?: number; groundedFactCount?: number }
+    | undefined;
+  const executionCounters = [
+    { label: 'Qloo options returned', value: qloo?.returnedCount },
+    { label: 'Eligible options sent to Qloo', value: qloo?.sentCandidateCount },
+    { label: 'AI HTTP requests', value: agent?.requestCount },
+    { label: 'AI tool steps completed', value: agent?.toolSteps },
+    { label: 'Public facts validated', value: agent?.groundedFactCount },
+  ];
   const receipts = evidence.receipts as
     | {
         id: string;
@@ -1989,7 +2476,16 @@ function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
       }[]
     | undefined;
   const provenance = evidence.provenance as
-    | { mode: string; status?: string; candidateCount?: number }
+    | {
+        mode: string;
+        label?: string;
+        status?: string;
+        candidateCount?: number;
+        mappedCount?: number;
+        unmappedCount?: number;
+        providerLabel?: string;
+        agent?: { enabled?: boolean; status?: string; label?: string };
+      }
     | undefined;
   return (
     <>
@@ -1998,6 +2494,33 @@ function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
         <div>
           <strong>Owner-only evidence</strong>
           <p>This drawer can show your selected references. The gift client cannot fetch it.</p>
+        </div>
+      </div>
+      <div className="evidence-layers">
+        <div>
+          <span>01 / AUTHORIZATION</span>
+          <strong>TASTEKEEPER gateway</strong>
+          <p>Scope and revisions are checked before a result is released.</p>
+        </div>
+        <div>
+          <span>02 / RECOMMENDATION</span>
+          <strong>
+            {provenance?.mode === 'qloo'
+              ? (provenance.providerLabel ?? 'Qloo cultural affinity')
+              : provenance?.mode === 'authored_sample' || provenance?.mode === 'sample'
+                ? 'Authored sample order'
+                : 'No provider result yet'}
+          </strong>
+          <p>{provenance?.label ?? 'The request has not returned recommendation evidence.'}</p>
+        </div>
+        <div>
+          <span>03 / EXPLANATION</span>
+          <strong>{provenance?.agent?.label ?? 'No AI explanation reported'}</strong>
+          <p>
+            {provenance?.agent
+              ? `Status: ${provenance.agent.status ?? (provenance.agent.enabled ? 'enabled' : 'disabled')}. Explanatory text cannot expand the approved scope.`
+              : 'A permission receipt records authorization; it does not establish preference quality.'}
+          </p>
         </div>
       </div>
       <dl className="evidence-summary">
@@ -2014,13 +2537,41 @@ function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
           <dd>
             {provenance?.mode === 'authored_sample' || provenance?.mode === 'sample'
               ? 'Authored sample rules'
-              : 'Qloo'}
+              : provenance?.mode === 'qloo'
+                ? 'Qloo'
+                : 'No result yet'}
           </dd>
         </div>
         <div>
           <dt>Workflow status</dt>
           <dd>{provenance?.status ?? 'No result yet'}</dd>
         </div>
+        {provenance?.candidateCount !== undefined && (
+          <div>
+            <dt>Approved candidates checked</dt>
+            <dd>{provenance.candidateCount}</dd>
+          </div>
+        )}
+        {provenance?.mappedCount !== undefined && (
+          <div>
+            <dt>Reviewed Qloo mappings</dt>
+            <dd>{provenance.mappedCount}</dd>
+          </div>
+        )}
+        {provenance?.unmappedCount !== undefined && (
+          <div>
+            <dt>Unmapped inventory omitted</dt>
+            <dd>{provenance.unmappedCount}</dd>
+          </div>
+        )}
+        {executionCounters.map(({ label, value }) =>
+          typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ) : null,
+        )}
         <div>
           <dt>Context revision</dt>
           <dd>{String(evidence.contextRevision)}</dd>
@@ -2034,7 +2585,7 @@ function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
           <dd>{String(evidence.clientEpoch)}</dd>
         </div>
       </dl>
-      <h3>References actually used</h3>
+      <h3>References approved for this request</h3>
       <div className="evidence-ref-list">
         {refs?.map((ref) => (
           <div key={ref.id}>
@@ -2043,6 +2594,10 @@ function EvidenceBody({ evidence }: { evidence: Record<string, unknown> }) {
           </div>
         ))}
       </div>
+      <p className="evidence-reference-note">
+        Selected references are owner-only. A provider can use only the reviewed mappings available
+        for this authorized query.
+      </p>
       <h3>Release receipts</h3>
       {!receipts?.length ? (
         <p>No result has passed the final release gate yet.</p>

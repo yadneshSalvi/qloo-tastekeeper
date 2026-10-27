@@ -2,14 +2,23 @@
  * The gateway still owns authorization before the call and at final release.
  */
 import { fileURLToPath } from 'node:url';
+import {
+  discardProviderBody,
+  ProviderResponseError,
+  readProviderJson,
+  withinDeadline,
+} from './provider-http.ts';
 
 export type QlooStatus = 'ok' | 'empty' | 'needs_input' | 'partial' | 'degraded' | 'error';
+export type QlooTransport = 'official-harness' | 'insights';
 export type QlooFailureCode =
   | 'NOT_CONFIGURED'
   | 'INVALID_INPUT'
   | 'INVALID_RESPONSE'
   | 'CANCELLED'
   | 'TIMEOUT'
+  | 'UPSTREAM_LIMIT'
+  | 'UPSTREAM_AUTH'
   | 'UPSTREAM_UNAVAILABLE';
 export interface QlooRankInput {
   type: 'book' | 'movie' | 'place';
@@ -22,7 +31,7 @@ export interface QlooRankResult {
   rankedIds: string[];
   warnings: string[];
   errorCode?: QlooFailureCode;
-  provenance: { mode: 'qloo'; transport: 'official-harness'; liveCallAttempted: boolean };
+  provenance: { mode: 'qloo'; transport: QlooTransport; liveCallAttempted: boolean };
 }
 export interface QlooCapability {
   ready: boolean;
@@ -31,8 +40,22 @@ export interface QlooCapability {
   tools: string[];
   liveCallMade: false;
 }
-type Settings = { env?: Record<string, string | undefined>; timeoutMs?: number };
+export type QlooSettings = {
+  env?: Record<string, string | undefined>;
+  timeoutMs?: number;
+  transport?: QlooTransport;
+  fetch?: typeof globalThis.fetch;
+  /** Insights only: trusted authorization and per-HTTP budget reservation.
+   * Errors propagate. Harness-internal retries cannot use this reservation API.
+   */
+  beforeProviderCall?: () => Promise<void>;
+};
+type Settings = QlooSettings;
 const endpoint = 'https://hackathon.api.qloo.com';
+/** Rich Qloo entity metadata needs more room than compact model tool outputs.
+ * This bounds decoded response bytes; entity-count and deadline limits still apply.
+ */
+export const QLOO_MAX_RESPONSE_BYTES = 1024 * 1024;
 const statuses = new Set<QlooStatus>([
   'ok',
   'empty',
@@ -45,9 +68,12 @@ const usable = new Set<QlooStatus>(['ok', 'partial', 'degraded']);
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const provenance = (liveCallAttempted: boolean): QlooRankResult['provenance'] => ({
+const provenance = (
+  liveCallAttempted: boolean,
+  transport: QlooTransport = 'official-harness',
+): QlooRankResult['provenance'] => ({
   mode: 'qloo',
-  transport: 'official-harness',
+  transport,
   liveCallAttempted,
 });
 const warnings: Record<QlooStatus, string> = {
@@ -58,11 +84,15 @@ const warnings: Record<QlooStatus, string> = {
   degraded: 'Qloo reported reduced evidence quality for this request.',
   error: 'Qloo could not complete this request. No sample recommendation was substituted.',
 };
-const fail = (errorCode: QlooFailureCode, liveCallMade = false): QlooRankResult => ({
+const fail = (
+  errorCode: QlooFailureCode,
+  liveCallMade = false,
+  transport: QlooTransport = 'official-harness',
+): QlooRankResult => ({
   status: 'error',
   rankedIds: [],
   errorCode,
-  provenance: provenance(liveCallMade),
+  provenance: provenance(liveCallMade, transport),
   warnings: [
     errorCode === 'NOT_CONFIGURED'
       ? 'Live Qloo is not configured. No sample recommendation was substituted.'
@@ -72,9 +102,13 @@ const fail = (errorCode: QlooFailureCode, liveCallMade = false): QlooRankResult 
           ? 'This request was cancelled before a result could be released.'
           : errorCode === 'TIMEOUT'
             ? 'Qloo did not finish within the request time limit.'
-            : errorCode === 'INVALID_RESPONSE'
-              ? 'Qloo returned an unexpected response. No result was released.'
-              : warnings.error,
+            : errorCode === 'UPSTREAM_LIMIT'
+              ? 'Qloo has reached its request limit. Try again later.'
+              : errorCode === 'UPSTREAM_AUTH'
+                ? 'Qloo access could not be verified. Ask the service operator to check access.'
+                : errorCode === 'INVALID_RESPONSE'
+                  ? 'Qloo returned an unexpected response. No result was released.'
+                  : warnings.error,
   ],
 });
 export function validQlooIds(ids: unknown): ids is string[] {
@@ -132,6 +166,115 @@ export function projectRankEnvelope(raw: unknown, candidateIds: string[]): QlooR
       : [];
   if (status === 'ok' && rankedIds.length === 0) notes.push('Qloo returned no ranked candidates.');
   return { status, rankedIds, warnings: notes, provenance: provenance(true) };
+}
+
+/** The documented Insights endpoint used by the pinned harness rank workflow.
+ * Only ordered candidate membership leaves this boundary. Affinity, request
+ * metadata, provider warnings and explainability may contain private references.
+ */
+export function projectInsightsResponse(raw: unknown, candidateIds: string[]): QlooRankResult {
+  const transport = 'insights';
+  if (!validQlooIds(candidateIds)) return fail('INVALID_INPUT', false, transport);
+  if (
+    !record(raw) ||
+    (raw.success !== undefined && raw.success !== true) ||
+    (raw.error !== undefined && raw.error !== null) ||
+    !record(raw.results) ||
+    !Array.isArray(raw.results.entities) ||
+    raw.results.entities.length > candidateIds.length
+  )
+    return fail('INVALID_RESPONSE', true, transport);
+  const allowed = new Map(candidateIds.map((id) => [id.toLowerCase(), id]));
+  const rankedIds: string[] = [];
+  for (const item of raw.results.entities) {
+    if (!record(item) || typeof item.entity_id !== 'string')
+      return fail('INVALID_RESPONSE', true, transport);
+    const id = allowed.get(item.entity_id.toLowerCase());
+    if (!id || rankedIds.includes(id)) return fail('INVALID_RESPONSE', true, transport);
+    rankedIds.push(id);
+  }
+  const warned = Array.isArray(raw.warnings) && raw.warnings.length > 0;
+  const status =
+    rankedIds.length === 0
+      ? 'empty'
+      : rankedIds.length < candidateIds.length || warned
+        ? 'partial'
+        : 'ok';
+  return {
+    status,
+    rankedIds,
+    warnings: status === 'ok' ? [] : [warnings[status]],
+    provenance: provenance(true, transport),
+  };
+}
+
+async function rankInsights(
+  input: QlooRankInput,
+  settings: QlooSettings,
+  signal: AbortSignal,
+  deadline: AbortSignal,
+): Promise<QlooRankResult> {
+  // Keep the trusted callback outside the provider catch. Authorization, budget,
+  // and database failures retain their original domain error in the gateway.
+  if (settings.beforeProviderCall) {
+    try {
+      await withinDeadline(settings.beforeProviderCall(), signal);
+    } catch (error) {
+      if (!signal.aborted) throw error;
+      return fail(input.signal?.aborted ? 'CANCELLED' : 'TIMEOUT', false, 'insights');
+    }
+  }
+  if (signal.aborted)
+    return fail(input.signal?.aborted ? 'CANCELLED' : 'TIMEOUT', false, 'insights');
+  const url = new URL('/v2/insights', endpoint);
+  url.searchParams.set('filter.type', `urn:entity:${input.type}`);
+  url.searchParams.set('filter.results.entities', input.candidateIds.join(','));
+  url.searchParams.set('signal.interests.entities', input.signalIds.join(','));
+  url.searchParams.set('take', String(input.candidateIds.length));
+  try {
+    // One request, no retries or redirects. Reservation caps can count every
+    // actual outbound HTTP request in the callback immediately above.
+    const response = await withinDeadline(
+      (settings.fetch ?? globalThis.fetch)(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'X-Api-Key': (settings.env ?? process.env).QLOO_API_KEY!.trim(),
+        },
+        signal,
+        redirect: 'error',
+        cache: 'no-store',
+      }),
+      signal,
+    );
+    if (!response.ok) {
+      discardProviderBody(response);
+      return fail(
+        response.status === 429
+          ? 'UPSTREAM_LIMIT'
+          : response.status === 401 || response.status === 403
+            ? 'UPSTREAM_AUTH'
+            : 'UPSTREAM_UNAVAILABLE',
+        true,
+        'insights',
+      );
+    }
+    const raw = await readProviderJson(response, signal, QLOO_MAX_RESPONSE_BYTES);
+    signal.throwIfAborted();
+    return projectInsightsResponse(raw, input.candidateIds);
+  } catch (error) {
+    return fail(
+      input.signal?.aborted
+        ? 'CANCELLED'
+        : deadline.aborted
+          ? 'TIMEOUT'
+          : error instanceof ProviderResponseError
+            ? 'INVALID_RESPONSE'
+            : 'UPSTREAM_UNAVAILABLE',
+      true,
+      'insights',
+    );
+  }
 }
 
 function childEnvironment(source: Record<string, string | undefined>): Record<string, string> {
@@ -228,27 +371,32 @@ export async function rankQloo(
   input: QlooRankInput,
   settings: Settings = {},
 ): Promise<QlooRankResult> {
+  const env = settings.env ?? process.env;
+  const transport = settings.transport ?? env.QLOO_TRANSPORT ?? 'official-harness';
+  if (transport !== 'official-harness' && transport !== 'insights') return fail('INVALID_INPUT');
+  if (transport === 'official-harness' && settings.beforeProviderCall) return fail('INVALID_INPUT');
   if (
     !['book', 'movie', 'place'].includes(input.type) ||
     !validQlooIds(input.signalIds) ||
     !validQlooIds(input.candidateIds)
   )
-    return fail('INVALID_INPUT');
-  if (input.signal?.aborted) return fail('CANCELLED');
+    return fail('INVALID_INPUT', false, transport);
+  if (input.signal?.aborted) return fail('CANCELLED', false, transport);
   const candidateIds = [...input.candidateIds];
   const signalIds = [...input.signalIds];
   const optionType = input.type;
-  const env = settings.env ?? process.env;
-  if (!env.QLOO_API_KEY?.trim()) return fail('NOT_CONFIGURED');
+  if (!env.QLOO_API_KEY?.trim()) return fail('NOT_CONFIGURED', false, transport);
   let ms: number;
   try {
     ms = timeout(settings);
     childEnvironment(env);
   } catch {
-    return fail('INVALID_INPUT');
+    return fail('INVALID_INPUT', false, transport);
   }
   const deadline = AbortSignal.timeout(ms);
   const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
+  if (transport === 'insights')
+    return rankInsights({ ...input, candidateIds, signalIds }, settings, signal, deadline);
   let harness: Awaited<ReturnType<typeof openHarness>> | undefined;
   let called = false;
   try {

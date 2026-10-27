@@ -12,7 +12,7 @@ export function Landing() {
     setError('');
     try {
       const response = await fetch('/api/demo', { method: 'POST' });
-      if (!response.ok) throw new Error('The sample workspace is unavailable. Please try again.');
+      if (!response.ok) throw new Error('The demo workspace is unavailable. Please try again.');
       window.location.assign(path);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start a workspace.');
@@ -30,7 +30,7 @@ export function Landing() {
           <a href="#how-it-works">How it works</a>
           <Link href="/developers">For developers</Link>
           <Button variant="secondary" onClick={() => start('/home')} busy={busy}>
-            Try the sample <ArrowRight size={16} />
+            Explore the demo <ArrowRight size={16} />
           </Button>
         </nav>
       </header>
@@ -62,7 +62,7 @@ export function Landing() {
             )}
             <div className="landing-note">
               <ShieldCheck size={16} />
-              <span>An isolated, hands-on sample. No account or payment.</span>
+              <span>A temporary, isolated demo. No account or payment.</span>
             </div>
           </div>
           <div className="landing-illustration">
@@ -115,9 +115,9 @@ export function Landing() {
         <section className="truth-note">
           <ShieldCheck size={21} />
           <p>
-            This sample uses authored references and transparent recommendation rules. Qloo ranking
-            is not connected. Consent, saved choices, corrections, and revocation run against a real
-            local database.
+            Reviewed cultural references. Public inventory. Permission checked at every release.
+            Live Qloo results and authored sample choices are labeled separately, and every result
+            includes a receipt. Suggestions are possibilities, not promises about individual taste.
           </p>
         </section>
       </main>

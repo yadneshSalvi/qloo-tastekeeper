@@ -19,3 +19,18 @@ playwright-report/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# Nested private artifacts must not enter container or cloud build contexts.
+**/plans
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/node_modules
+**/.next
+**/.local-qa
+**/.data
+**/.cache
+**/.artifacts
+**/test-results
+**/playwright-report

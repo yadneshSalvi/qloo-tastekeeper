@@ -1,6 +1,5 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { pool, transaction, shutdownDb } from '../src/server/db.ts';
 import {
@@ -9,10 +8,13 @@ import {
   createDemo,
   createInvitation,
   disableClient,
+  eraseContext,
+  eraseWorkspace,
   loadBundle,
   ownerWorkspace,
   principalFromToken,
   revokeGrant,
+  ownerFromToken,
   type Owner,
 } from '../src/server/store.ts';
 import {
@@ -21,9 +23,13 @@ import {
   processOutbox,
   queueDecision,
   releaseDecision,
+  workerTick,
 } from '../src/server/gateway.ts';
 import { PUBLIC_FIELDS, type DecisionInput } from '../src/domain/contracts.ts';
 import { DomainError } from '../src/server/errors.ts';
+import { applyMigrations } from '../src/server/migrate.ts';
+import { claimBrowserSession, principalFromBrowserSession } from '../src/server/client-sessions.ts';
+import { reserveProviderRequest } from '../src/server/provider-budget.ts';
 
 const base = new URL(
   process.env.TEST_DATABASE_URL ??
@@ -36,11 +42,7 @@ if (!base.pathname.endsWith('_test'))
 process.env.DATABASE_URL = base.toString();
 process.env.DEMO_ENABLED = 'true';
 before(async () => {
-  const exists = await pool().query("SELECT to_regclass('public.schema_migrations') AS name");
-  if (!exists.rows[0].name)
-    await pool().query(
-      await readFile(new URL('../migrations/001_gateway.sql', import.meta.url), 'utf8'),
-    );
+  await applyMigrations(pool());
   await pool().query('TRUNCATE tenants, worker_heartbeats, request_limits CASCADE');
 });
 after(async () => {
@@ -426,4 +428,151 @@ test('expired worker attempts are fenced out after a successor prepares and rele
   assert.equal(row.rows[0].state, 'released');
   assert.equal(row.rows[0].attempts, 2);
   assert.equal(row.rows[0].error_code, null);
+});
+
+test('durable browser sessions renew after inactivity, remain client-bound, and obey revocation', async () => {
+  const f = await fixture();
+  const invite = await createInvitation(f.owner, {
+    contextId: f.context.id,
+    clientId: 'books',
+    purpose: 'gift',
+    signalIds: f.context.signals.map((s) => s.id),
+    expiresInHours: 24,
+    requestLimit: 4,
+    snapshotMode: 'pinned',
+    delegateName: 'Alex',
+    acknowledged: true,
+  });
+  const claimed = await claimBrowserSession('books', new URL(invite.claimUrl).hash.slice(7));
+  assert.equal('credential' in claimed, false);
+  const original = await principalFromBrowserSession('books', claimed.sessionToken);
+  const input = {
+    ...f.input,
+    grantId: claimed.grant.id,
+    idempotencyKey: randomUUID(),
+    brief: { occasion: 'birthday' as const, note: 'A small thoughtful gift' },
+  };
+  const queued = await queueDecision(original, input);
+  await prepareDecision(original.tenantId, queued.id);
+  await transaction(original.tenantId, (db) =>
+    db.query(
+      "UPDATE credentials SET expires_at=now()-interval '1 minute' WHERE tenant_id=$1 AND token_hash=$2",
+      [original.tenantId, original.tokenHash],
+    ),
+  );
+  const resumed = await principalFromBrowserSession('books', claimed.sessionToken);
+  assert.notEqual(resumed.tokenHash, original.tokenHash);
+  const session = await clientSession(resumed);
+  assert.equal(session.latestRunId, queued.id);
+  assert.deepEqual(session.brief, { hardConstraints: {}, mode: 'sample', brief: input.brief });
+  assert.equal((await releaseDecision(resumed, queued.id)).state, 'released');
+  const stored = await transaction(original.tenantId, (db) =>
+    db.query('SELECT * FROM client_sessions WHERE tenant_id=$1', [original.tenantId]),
+  );
+  assert.ok(!JSON.stringify(stored.rows).includes(claimed.sessionToken));
+  await assert.rejects(
+    principalFromBrowserSession('media', claimed.sessionToken),
+    code('PRINCIPAL_DENIED'),
+  );
+  await revokeGrant(f.owner, claimed.grant.id);
+  await assert.rejects(
+    principalFromBrowserSession('books', claimed.sessionToken),
+    code('GRANT_REVOKED'),
+  );
+});
+
+test('provider HTTP reservations enforce per-run and per-tenant limits under concurrency', async () => {
+  const f = await fixture();
+  const run = await queueDecision(f.principal, f.input);
+  const outcomes = await Promise.allSettled([
+    reserveProviderRequest(f.owner.tenantId, run.id, 'qloo'),
+    reserveProviderRequest(f.owner.tenantId, run.id, 'qloo'),
+  ]);
+  assert.equal(outcomes.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.filter((r) => r.status === 'rejected').length, 1);
+  await reserveProviderRequest(f.owner.tenantId, run.id, 'openai');
+  await reserveProviderRequest(f.owner.tenantId, run.id, 'openai');
+  await assert.rejects(
+    reserveProviderRequest(f.owner.tenantId, run.id, 'openai'),
+    code('PROVIDER_ATTEMPT_LIMIT'),
+  );
+  const beforeLimit = process.env.QLOO_TENANT_DAILY_LIMIT;
+  process.env.QLOO_TENANT_DAILY_LIMIT = '1';
+  try {
+    const next = await queueDecision(f.principal, { ...f.input, idempotencyKey: randomUUID() });
+    await assert.rejects(
+      reserveProviderRequest(f.owner.tenantId, next.id, 'qloo'),
+      code('UPSTREAM_LIMIT'),
+    );
+  } finally {
+    if (beforeLimit === undefined) delete process.env.QLOO_TENANT_DAILY_LIMIT;
+    else process.env.QLOO_TENANT_DAILY_LIMIT = beforeLimit;
+  }
+});
+
+test('context erasure immediately removes retained profile payloads and blocks prior delegated access', async () => {
+  const f = await fixture();
+  const { run } = await completed(f);
+  await eraseContext(f.owner, f.context.id);
+  assert.ok(
+    !(await ownerWorkspace(f.owner)).contexts.some((context) => context.id === f.context.id),
+  );
+  const rows = await transaction(f.owner.tenantId, async (db) => ({
+    revisions: (
+      await db.query('SELECT * FROM context_revisions WHERE tenant_id=$1 AND context_id=$2', [
+        f.owner.tenantId,
+        f.context.id,
+      ])
+    ).rows,
+    run: (
+      await db.query(
+        'SELECT encrypted_inputs,encrypted_checkpoint,result FROM decision_runs WHERE tenant_id=$1 AND id=$2',
+        [f.owner.tenantId, run.id],
+      )
+    ).rows[0],
+  }));
+  assert.equal(rows.revisions.length, 0);
+  assert.deepEqual(rows.run, { encrypted_inputs: '', encrypted_checkpoint: null, result: null });
+  await assert.rejects(releaseDecision(f.principal, run.id), code('CONTEXT_DELETED'));
+});
+
+test('workspace deletion removes records and sessions without granting runtime an immutability bypass', async () => {
+  const f = await fixture();
+  await completed(f);
+  await assert.rejects(
+    transaction(f.owner.tenantId, async (db) => {
+      await db.query("SELECT set_config('app.retention_delete','on',true)");
+      await db.query('DELETE FROM context_revisions WHERE tenant_id=$1', [f.owner.tenantId]);
+    }),
+    /immutable record/,
+  );
+  await eraseWorkspace(f.owner);
+  assert.equal(
+    (await pool().query('SELECT tenant_id FROM tenants WHERE tenant_id=$1', [f.owner.tenantId]))
+      .rowCount,
+    0,
+  );
+  if ('token' in f.owner) await assert.rejects(ownerFromToken(String(f.owner.token)));
+  await assert.rejects(clientSession(f.principal));
+});
+
+test('maintenance removes expired demo workspaces and does not call a provider for idle workspaces', async () => {
+  const f = await fixture();
+  await pool().query("UPDATE tenants SET expires_at=now()-interval '1 minute' WHERE tenant_id=$1", [
+    f.owner.tenantId,
+  ]);
+  const before = Number(
+    (await pool().query('SELECT count(*) FROM provider_attempts')).rows[0].count,
+  );
+  const result = await workerTick();
+  assert.ok(Number(result.erased) >= 1);
+  assert.equal(
+    (await pool().query('SELECT tenant_id FROM tenants WHERE tenant_id=$1', [f.owner.tenantId]))
+      .rowCount,
+    0,
+  );
+  assert.equal(
+    Number((await pool().query('SELECT count(*) FROM provider_attempts')).rows[0].count),
+    before,
+  );
 });

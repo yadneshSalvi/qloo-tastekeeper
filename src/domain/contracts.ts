@@ -9,6 +9,25 @@ export const constraintsSchema = z
     setting: z.enum(['any', 'indoors', 'outdoors']).optional(),
   })
   .strict();
+export const briefSchema = z
+  .object({
+    occasion: z.enum(['birthday', 'thank_you', 'just_because', 'for_me']),
+    note: z.string().trim().max(240).optional(),
+  })
+  .strict();
+export const referenceSearchSchema = z
+  .object({
+    query: z.string().trim().min(2).max(100),
+    type: z.enum(['book', 'movie', 'place', 'person', 'artist']),
+  })
+  .strict();
+export const addReferenceSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+    searchId: z.uuid(),
+    candidateId: z.uuid(),
+  })
+  .strict();
 export const decisionSchema = z
   .object({
     grantId: z.uuid(),
@@ -30,6 +49,7 @@ export const decisionSchema = z
     hardConstraints: constraintsSchema,
     idempotencyKey: z.uuid(),
     mode: z.enum(['sample', 'qloo']),
+    brief: briefSchema.optional(),
   })
   .strict();
 export const invitationSchema = z

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { createServer, request, type Server, type IncomingHttpHeaders } from 'node:http';
 import test, { type TestContext } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   createClientServer,
   readClientConfig,
@@ -9,7 +12,6 @@ import {
 } from '../clients/server.ts';
 
 const credential = 'synthetic-gateway-credential-never-for-browser';
-const renewedCredential = 'synthetic-renewed-credential-never-for-browser';
 const invitation = 'synthetic-one-time-invitation-token';
 const privateSentinel = 'PRIVATE_REFERENCE_SENTINEL';
 
@@ -64,6 +66,7 @@ async function listen(server: Server) {
   return address.port;
 }
 async function close(server: Server) {
+  if (!server.listening) return;
   await new Promise<void>((resolve, reject) =>
     server.close((error) => (error ? reject(error) : resolve())),
   );
@@ -123,7 +126,56 @@ function browserRequest(
       },
     );
     req.on('error', reject);
+    req.setTimeout(3000, () => req.destroy(new Error('The test HTTP request timed out.')));
     req.end(serialized);
+  });
+}
+
+async function startClientProcess(config: ClientConfig, port: number): Promise<ChildProcess> {
+  const child = spawn(process.execPath, ['--import', 'tsx', 'clients/server.ts'], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    // Only synthetic fixture credentials reach the subprocess. In particular,
+    // never inherit a developer's provider or database environment variables.
+    env: {
+      PATH: process.env.PATH,
+      NODE_ENV: 'test',
+      CLIENT_ID: config.clientId,
+      CLIENT_HOST: config.host,
+      PORT: String(port),
+      CLIENT_SECRET: config.clientSecret,
+      SESSION_SECRET: config.sessionSecret,
+      GATEWAY_ORIGIN: config.gatewayOrigin,
+      OWNER_ORIGIN: config.ownerOrigin,
+      PUBLIC_ORIGIN: config.publicOrigin,
+    },
+    stdio: ['ignore', 'ignore', 'ignore'],
+  });
+  let failed = false;
+  child.on('error', () => {
+    failed = true;
+  });
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    if (failed || child.exitCode !== null || child.signalCode !== null) break;
+    try {
+      if ((await browserRequest(port, config.publicOrigin, '/health')).status === 200) return child;
+    } catch {
+      // The process has not bound its port yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  await stopClientProcess(child);
+  throw new Error('The reference client test process did not become ready.');
+}
+async function stopClientProcess(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 1500);
+    child.once('exit', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.kill('SIGTERM');
   });
 }
 
@@ -135,7 +187,16 @@ async function fixture(
   const state = {
     revoked: false,
     qlooUnavailable: false,
-    renewed: false,
+    sessionTokens: new Set<string>(),
+    runIds: [] as string[],
+    latestRunId: undefined as string | undefined,
+    brief: undefined as
+      | {
+          hardConstraints: Record<string, string | number>;
+          mode: 'sample' | 'qloo';
+          brief?: { occasion: string; note?: string };
+        }
+      | undefined,
     queueState: 'queued' as 'queued' | 'released',
     received: [] as { path: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }[],
     selections: [] as { runId: string; itemId: string; title: string; savedAt: string }[],
@@ -150,24 +211,27 @@ async function fixture(
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(body));
     };
-    if (state.revoked && path !== '/v1/invitations/claim')
+    if (state.revoked && path !== '/v1/browser-sessions/claim')
       return send(403, { error: { code: 'GRANT_REVOKED', message: 'This connection has ended.' } });
+    if (path !== '/v1/browser-sessions/claim') {
+      const token = req.headers['x-client-session'];
+      if (typeof token !== 'string' || !state.sessionTokens.has(token))
+        return send(401, { error: { code: 'TOKEN_EXPIRED', message: 'This session has ended.' } });
+    }
     const view = {
       ...sampleView(
         clientId,
-        new Date(
-          Date.now() + (options.earlyExpiry && !state.renewed ? 30_000 : 300_000),
-        ).toISOString(),
+        new Date(Date.now() + (options.earlyExpiry ? 30_000 : 300_000)).toISOString(),
       ),
       selections: state.selections,
+      runIds: state.runIds,
+      ...(state.latestRunId ? { latestRunId: state.latestRunId } : {}),
+      ...(state.brief ? { brief: state.brief } : {}),
     };
-    if (path === '/v1/invitations/claim') return send(200, { ...view, credential });
-    if (path === '/v1/credentials/renew') {
-      state.renewed = true;
-      return send(200, {
-        credential: renewedCredential,
-        credentialExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-      });
+    if (path === '/v1/browser-sessions/claim') {
+      const sessionToken = randomBytes(32).toString('base64url');
+      state.sessionTokens.add(sessionToken);
+      return send(200, { ...view, sessionToken, credential });
     }
     if (path === '/v1/session')
       return send(200, { ...view, credential: 'extra-field-must-be-stripped' });
@@ -176,6 +240,13 @@ async function fixture(
         return send(503, {
           error: { code: 'UPSTREAM_UNAVAILABLE', message: 'No Qloo key is configured.' },
         });
+      if (!state.runIds.includes('run-example')) state.runIds.push('run-example');
+      state.latestRunId = 'run-example';
+      state.brief = {
+        hardConstraints: payload.hardConstraints as Record<string, string | number>,
+        mode: payload.mode as 'sample' | 'qloo',
+        ...(payload.brief ? { brief: payload.brief as { occasion: string; note?: string } } : {}),
+      };
       return send(202, {
         id: 'run-example',
         state: state.queueState,
@@ -189,11 +260,24 @@ async function fixture(
         state: 'released',
         items: [view.catalog.items[2], view.catalog.items[0]],
         provenance: {
-          mode: 'authored_sample',
-          label: 'Authored sample; no Qloo call.',
-          status: 'ok',
+          ...(state.brief?.mode === 'qloo'
+            ? {
+                mode: 'qloo',
+                label: 'Synthetic Qloo fixture; no provider request.',
+                status: 'partial',
+                mappedCount: 3,
+                returnedCount: 2,
+                unmappedCount: 0,
+                agent: { enabled: true, status: 'complete', label: 'Synthetic completed tools' },
+              }
+            : { mode: 'authored_sample', label: 'Authored sample; no Qloo call.', status: 'ok' }),
           candidateCount: 3,
           selectedCount: 2,
+          privateReferences: [privateSentinel],
+        },
+        qlooEvidence: {
+          transport: 'synthetic',
+          requestCount: 1,
           privateReferences: [privateSentinel],
         },
         receipt: {
@@ -215,6 +299,10 @@ async function fixture(
       };
       state.selections.push(selection);
       return send(200, { saved: true, ...selection });
+    }
+    if (path === '/v1/browser-sessions/disconnect') {
+      state.sessionTokens.delete(String(req.headers['x-client-session']));
+      return send(200, { disconnected: true });
     }
     return send(404, { error: { code: 'NOT_FOUND', message: 'Unknown route' } });
   });
@@ -276,7 +364,7 @@ test('client configuration requires real server secrets and gives each app a sep
   }
 });
 
-test('claim stores credentials only server-side, strips unknown private fields, and uses an opaque host-only cookie', async (t) => {
+test('claim uses a durable opaque gateway handle, strips private fields, and sets a signed host-only cookie', async (t) => {
   const f = await fixture(t);
   const page = await f.call('/claim');
   assert.equal(page.status, 200);
@@ -294,14 +382,22 @@ test('claim stores credentials only server-side, strips unknown private fields, 
   assert.doesNotMatch(cookie, /synthetic/);
   assert.equal(f.state.received[0]!.headers['x-client-id'], 'books');
   assert.equal(f.state.received[0]!.headers['x-client-secret'], f.config.clientSecret);
+  assert.equal(f.state.received[0]!.path, '/v1/browser-sessions/claim');
   assert.equal(f.state.received[0]!.headers.authorization, undefined);
+  assert.equal(f.state.received[0]!.headers['x-client-session'], undefined);
+  const sessionToken = [...f.state.sessionTokens][0]!;
+  assert.match(sessionToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(response.text.includes(sessionToken), false);
   const session = await f.call('/api/session', { cookie });
   assert.equal(session.status, 200);
   assert.doesNotMatch(
     session.text,
     /extra-field-must-be-stripped|PRIVATE_REFERENCE_SENTINEL|synthetic-gateway/,
   );
-  assert.equal(f.state.received.at(-1)!.headers.authorization, `Bearer ${credential}`);
+  assert.equal(f.state.received.at(-1)!.path, '/v1/session');
+  assert.equal(f.state.received.at(-1)!.headers.authorization, undefined);
+  assert.equal(f.state.received.at(-1)!.headers['x-client-session'], sessionToken);
+  assert.equal(session.value.runIds, undefined);
   assert.equal(session.headers['cache-control'], 'private, no-store');
 });
 
@@ -315,6 +411,7 @@ test('client builds the exact scoped gateway request and preserves returned orde
       hardConstraints: { maxPrice: 2500, format: 'paperback' },
       mode: 'sample',
       idempotencyKey: '6876a458-a840-4c03-9e57-130b56ae3291',
+      brief: { occasion: 'birthday', note: 'Something for a quiet afternoon.' },
     },
   });
   assert.equal(queued.status, 202);
@@ -326,6 +423,10 @@ test('client builds the exact scoped gateway request and preserves returned orde
   assert.equal(forwarded.targetType, 'book');
   assert.equal(forwarded.operation, 'rank');
   assert.deepEqual(forwarded.hardConstraints, { maxPrice: 2500, format: 'paperback' });
+  assert.deepEqual(forwarded.brief, {
+    occasion: 'birthday',
+    note: 'Something for a quiet afternoon.',
+  });
   const result = await f.call('/api/decisions/run-example', { cookie });
   assert.equal(result.status, 200);
   assert.deepEqual(
@@ -346,7 +447,29 @@ test('client builds the exact scoped gateway request and preserves returned orde
   assert.deepEqual(session.value.brief, {
     hardConstraints: { maxPrice: 2500, format: 'paperback' },
     mode: 'sample',
+    brief: { occasion: 'birthday', note: 'Something for a quiet afternoon.' },
   });
+  assert.equal(session.value.latestRunId, 'run-example');
+  assert.deepEqual(f.state.runIds, ['run-example']);
+  await f.call('/api/decisions', {
+    method: 'POST',
+    cookie,
+    payload: { hardConstraints: {}, mode: 'qloo' },
+  });
+  const coverage = await f.call('/api/decisions/run-example', { cookie });
+  assert.equal(coverage.status, 200);
+  assert.deepEqual(coverage.value.provenance, {
+    mode: 'qloo',
+    label: 'Synthetic Qloo fixture; no provider request.',
+    status: 'partial',
+    candidateCount: 3,
+    selectedCount: 2,
+    mappedCount: 3,
+    returnedCount: 2,
+    unmappedCount: 0,
+    agent: { enabled: true, status: 'complete', label: 'Synthetic completed tools' },
+  });
+  assert.doesNotMatch(coverage.text, /qlooEvidence|PRIVATE_REFERENCE_SENTINEL/);
 });
 
 test('revoked access is checked for session, stored result, and selection; client never releases its old result cache', async (t) => {
@@ -410,7 +533,10 @@ test('wrong host, cross-origin POST, session crossover, and extra scope fields f
     400,
   );
   assert.equal((await f.call('/api/decisions/uncreated-run', { cookie })).status, 404);
-  assert.equal(f.state.received.length, count);
+  assert.deepEqual(
+    f.state.received.slice(count).map((entry) => entry.path),
+    ['/v1/session', '/v1/session', '/v1/session'],
+  );
   const media = await fixture(t, { clientId: 'media' });
   assert.equal((await media.call('/api/session', { cookie })).status, 401);
   assert.equal(
@@ -424,14 +550,18 @@ test('wrong host, cross-origin POST, session crossover, and extra scope fields f
   assert.equal(media.state.received.length, 0);
 });
 
-test('near-expiry gateway credentials are renewed on the server and live mode keeps its real unavailable error', async (t) => {
+test('the opaque session delegates credential lifetime to the gateway and preserves live provider errors', async (t) => {
   const f = await fixture(t, { earlyExpiry: true });
   const { cookie } = await f.claim();
   const session = await f.call('/api/session', { cookie });
   assert.equal(session.status, 200);
-  assert.equal(f.state.received[1]!.path, '/v1/credentials/renew');
-  assert.equal(f.state.received[1]!.headers.authorization, `Bearer ${credential}`);
-  assert.equal(f.state.received[2]!.headers.authorization, `Bearer ${renewedCredential}`);
+  assert.equal(f.state.received[1]!.path, '/v1/session');
+  assert.equal(f.state.received[1]!.headers.authorization, undefined);
+  assert.equal(f.state.received[1]!.headers['x-client-session'], [...f.state.sessionTokens][0]);
+  assert.equal(
+    f.state.received.some((entry) => entry.path === '/v1/credentials/renew'),
+    false,
+  );
   assert.doesNotMatch(session.text, /synthetic-renewed/);
   f.state.qlooUnavailable = true;
   const unavailable = await f.call('/api/decisions', {
@@ -442,6 +572,7 @@ test('near-expiry gateway credentials are renewed on the server and live mode ke
   assert.equal(unavailable.status, 503);
   assert.equal((unavailable.value.error as { code: string }).code, 'UPSTREAM_UNAVAILABLE');
   assert.equal(f.state.received.at(-1)!.body.mode, 'qloo');
+  assert.ok(f.state.received.every((entry) => entry.headers.authorization === undefined));
 });
 
 test('idempotent gateway replay may return a released run without exposing unknown fields or rewriting state', async (t) => {
@@ -461,4 +592,87 @@ test('idempotent gateway replay may return a released run without exposing unkno
   assert.equal(replayed.value.replayed, true);
   assert.doesNotMatch(replayed.text, /PRIVATE_REFERENCE_SENTINEL/);
   assert.equal((await f.call('/api/decisions/run-example', { cookie })).status, 200);
+});
+
+test(
+  'the same cookie restores brief, saved choices and run access across separate client processes',
+  { timeout: 20_000 },
+  async (t) => {
+    const f = await fixture(t);
+    await close(f.client);
+    let child = await startClientProcess(f.config, f.port);
+    t.after(async () => stopClientProcess(child));
+    const firstPid = child.pid;
+    const { cookie } = await f.claim();
+    const persistedBrief = {
+      hardConstraints: { maxPrice: 2400, format: 'paperback' },
+      mode: 'sample',
+      brief: { occasion: 'thank_you', note: 'A small thank-you for a generous host.' },
+    };
+    const queued = await f.call('/api/decisions', {
+      method: 'POST',
+      cookie,
+      payload: persistedBrief,
+    });
+    assert.equal(queued.status, 202);
+    assert.equal(
+      (
+        await f.call('/api/decisions/run-example/selection', {
+          method: 'POST',
+          cookie,
+          payload: { itemId: 'item-c' },
+        })
+      ).status,
+      200,
+    );
+    await stopClientProcess(child);
+    child = await startClientProcess(f.config, f.port);
+    assert.notEqual(child.pid, firstPid);
+
+    const recovered = await f.call('/api/session', { cookie });
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(recovered.value.brief, persistedBrief);
+    assert.equal(recovered.value.latestRunId, 'run-example');
+    assert.equal((recovered.value.selections as unknown[]).length, 1);
+    assert.equal(recovered.headers['set-cookie'], undefined);
+    const result = await f.call('/api/decisions/run-example', { cookie });
+    assert.equal(result.status, 200);
+    assert.deepEqual(
+      (result.value.items as { id: string }[]).map((item) => item.id),
+      ['item-c', 'item-a'],
+    );
+    assert.equal(
+      f.state.received.filter((entry) => entry.path === '/v1/browser-sessions/claim').length,
+      1,
+    );
+    assert.ok(f.state.received.every((entry) => entry.headers.authorization === undefined));
+
+    // Every request must rehydrate authoritative membership, including on an
+    // already-running replacement process that previously fetched the result.
+    f.state.runIds = [];
+    const before = f.state.received.length;
+    const removed = await f.call('/api/decisions/run-example', { cookie });
+    assert.equal(removed.status, 404);
+    assert.equal((removed.value.error as { code: string }).code, 'DECISION_NOT_FOUND');
+    assert.deepEqual(
+      f.state.received.slice(before).map((entry) => entry.path),
+      ['/v1/session'],
+    );
+    assert.doesNotMatch(removed.text, /Public item/);
+  },
+);
+
+test('disconnect invalidates the durable gateway handle before clearing the browser cookie', async (t) => {
+  const f = await fixture(t);
+  const { cookie } = await f.claim();
+  const result = await f.call('/api/disconnect', { method: 'POST', cookie, payload: {} });
+  assert.equal(result.status, 200);
+  assert.equal(result.value.disconnected, true);
+  assert.equal(f.state.received.at(-1)!.path, '/v1/browser-sessions/disconnect');
+  assert.match(result.headers['set-cookie']![0]!, /Max-Age=0/);
+  assert.equal(f.state.sessionTokens.size, 0);
+  // Replaying the original signed cookie still has to pass the gateway.
+  const replayed = await f.call('/api/session', { cookie });
+  assert.equal(replayed.status, 401);
+  assert.equal((replayed.value.error as { code: string }).code, 'TOKEN_EXPIRED');
 });

@@ -88,6 +88,7 @@ test('recipient gift approval, a kept choice, explicit correction and revocation
     'selectedReferences',
   ])
     expect(serialized).not.toContain(`"${forbidden}"`);
+  await client.getByRole('button', { name: 'Authored sample', exact: true }).click();
   await client.getByRole('button', { name: 'Find a thoughtful book' }).click();
   await expect(client.locator('.result-card')).toHaveCount(3);
   const firstTitle = await client.locator('.result-card h3').first().innerText();
@@ -159,7 +160,7 @@ test('a second landing tab resumes the owner workspace; keyboard dialogs and new
   context,
 }, testInfo) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Try the sample' }).click();
+  await page.getByRole('button', { name: 'Explore the demo' }).click();
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.getByRole('heading', { name: /Good gifts begin/ })).toBeVisible();
   await accessible(page);
@@ -192,7 +193,7 @@ test('a second landing tab resumes the owner workspace; keyboard dialogs and new
   }
   const second = await context.newPage();
   await second.goto('/');
-  await second.getByRole('button', { name: 'Try the sample' }).click();
+  await second.getByRole('button', { name: 'Explore the demo' }).click();
   await expect(second).toHaveURL(/\/home$/);
   await expect(second.getByRole('heading', { name: /Good gifts begin/ })).toBeVisible();
   expect((await workspace(second)).contexts.map((c) => c.id)).toEqual(
@@ -205,7 +206,7 @@ test('a second landing tab resumes the owner workspace; keyboard dialogs and new
   await expect(page.getByRole('button', { name: 'Open access journal' })).toBeFocused();
   await page.goto('/contexts/new');
   await page.getByLabel('Name this space').fill('Small weekend rituals');
-  await page.getByLabel('Find a reference in the sample library').fill('Agnes');
+  await page.getByLabel('Find a reference in the quickstart library').fill('Agnes');
   await page.getByRole('button', { name: /Agnes Martin.*Choose this one/ }).click();
   await page.getByRole('button', { name: 'Review identities' }).click();
   expect((await workspace(page)).contexts).toHaveLength(2);
@@ -214,4 +215,42 @@ test('a second landing tab resumes the owner workspace; keyboard dialogs and new
   const created = (await workspace(page)).contexts.find((c) => c.name === 'Small weekend rituals')!;
   expect(created.signals.map((s) => s.title)).toEqual(['Agnes Martin']);
   expect((await workspace(page)).grants).toHaveLength(0);
+});
+
+test('owner controls explain retention, require deliberate context deletion, and erase the demo workspace', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Explore the demo' }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  const original = await workspace(page);
+  const gift = original.contexts.find((entry) => entry.purpose === 'gift')!;
+  const personal = original.contexts.find((entry) => entry.purpose === 'personal')!;
+  await page.goto(`/contexts/${gift.id}`);
+  await page.getByRole('button', { name: 'Delete this context', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Delete context', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Keep this context', exact: true }).click();
+  expect((await workspace(page)).contexts.some((entry) => entry.id === gift.id)).toBe(true);
+  await page.getByRole('button', { name: 'Delete this context', exact: true }).click();
+  await page.getByLabel(`Delete ${gift.name} and end its future access.`).check();
+  await page.getByRole('button', { name: 'Delete context', exact: true }).click();
+  await expect(page).toHaveURL(/\/contexts$/);
+  const remaining = await workspace(page);
+  expect(remaining.contexts.some((entry) => entry.id === gift.id)).toBe(false);
+  expect(remaining.contexts.find((entry) => entry.id === personal.id)).toEqual(personal);
+  if (testInfo.project.name === 'mobile')
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('button', { name: 'Demo ownership & privacy', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Your demo space, clearly owned.' });
+  await expect(dialog).toContainText('24 hours');
+  await expect(dialog).toContainText('Existing invitations and records remain until expiry.');
+  await expect(
+    dialog.getByRole('button', { name: 'Delete demo workspace', exact: true }),
+  ).toBeDisabled();
+  await accessible(page);
+  await dialog.getByLabel('Delete this demo workspace and end all its connections.').check();
+  await dialog.getByRole('button', { name: 'Delete demo workspace', exact: true }).click();
+  await expect(page).toHaveURL('/');
+  const denied = await page.request.get('/api/workspace');
+  expect(denied.status()).toBe(401);
 });

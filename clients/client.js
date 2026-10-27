@@ -52,6 +52,8 @@ const state = {
   paused: false,
   generation: 0,
   lastMode: 'sample',
+  modeChosen: false,
+  brief: { occasion: clientId === 'books' ? 'just_because' : 'for_me', note: '' },
   constraints:
     clientId === 'books'
       ? { maxPrice: 4000, format: 'any' }
@@ -75,6 +77,8 @@ const accessErrors = new Set([
   'GRANT_CHANGED',
   'GRANT_VERSION_MISMATCH',
   'AUTHORIZATION_CHANGED',
+  'CONTEXT_DELETED',
+  'DEMO_EXPIRED',
 ]);
 
 class ServiceError extends Error {
@@ -120,6 +124,23 @@ const sourceName = (value) => {
   }
 };
 const ownerLink = (path = '/home') => ownerOrigin + path;
+const execution = () => state.view?.execution;
+const liveAvailable = () => execution()?.qlooAvailable;
+const modeDescription = () =>
+  state.mode === 'qloo'
+    ? liveAvailable() === false
+      ? 'The server reports that live Qloo is unavailable for this connection. Your brief will be preserved if you try.'
+      : 'Qloo ranks reviewed matches in this approved inventory. Only public choices and permitted explanations reach this app. Cultural affinity is not individual certainty.'
+    : 'An authored sample order from TASTEKEEPER, explicitly separate from Qloo. No individual preference or purchase likelihood has been measured.';
+function applySession(view) {
+  state.view = view;
+  if (!state.modeChosen && !view.brief) {
+    state.mode =
+      view.execution?.defaultMode === 'qloo' && view.execution?.qlooAvailable ? 'qloo' : 'sample';
+    state.lastMode = state.mode;
+    state.brief.occasion = view.grant.purpose === 'gift' ? 'just_because' : 'for_me';
+  }
+}
 const directionsUrl = (item, facts) =>
   'https://www.google.com/maps/search/?api=1&query=' +
   encodeURIComponent(facts?.identity || `${item.title}, ${item.creator}, London`);
@@ -162,6 +183,26 @@ async function api(path, payload) {
 }
 
 function errorCopy(error) {
+  if (error.code === 'CONTEXT_DELETED')
+    return {
+      title: 'This taste context was deleted.',
+      body: 'Its future requests are blocked. The owner can create a new context and review a new permission. Previously shared choices cannot be recalled.',
+    };
+  if (error.code === 'DEMO_EXPIRED')
+    return {
+      title: 'This demo space has expired.',
+      body: 'The temporary workspace has reached its end. Return to TASTEKEEPER to start a new isolated space and invitation.',
+    };
+  if (error.code === 'BUDGET_EXHAUSTED')
+    return {
+      title: 'Every permitted request has been used.',
+      body: 'This connection has reached the request allowance approved by its owner. A new permission is needed to request more choices.',
+    };
+  if (error.code === 'UPSTREAM_LIMIT')
+    return {
+      title: 'Today’s live allowance has been reached.',
+      body: 'Your brief is preserved. Try live after its allowance renews, or explicitly choose authored sample mode.',
+    };
   if (error.code === 'GRANT_REVOKED')
     return {
       title: 'Mira has ended this connection.',
@@ -201,12 +242,28 @@ function errorCopy(error) {
   if (error.code === 'NO_ELIGIBLE_OPTIONS')
     return {
       title: 'Nothing fits this brief just yet.',
-      body: `No permitted ${wording.plural} in this sample catalog meet these constraints. Adjust the brief and try again; the app will keep the same approved catalog.`,
+      body: `No permitted ${wording.plural} in this catalog meet these constraints. Adjust the brief and try again; the app will keep the same approved catalog.`,
     };
   if (['UPSTREAM_UNAVAILABLE', 'QLOO_UNAVAILABLE', 'QLOO_NOT_CONFIGURED'].includes(error.code))
     return {
       title: 'Qloo live is unavailable.',
-      body: 'No Qloo key is configured for this demo. Your brief is preserved. Try live again, or explicitly choose the authored sample mode.',
+      body: 'The live provider could not complete this request. Your brief is preserved. Retry live, or explicitly choose authored sample mode.',
+    };
+  if (
+    [
+      'SIGNAL_SELECTION_REQUIRED',
+      'NO_ACTIVE_SIGNALS',
+      'NO_MAPPED_OPTIONS',
+      'MAPPING_REQUIRED',
+      'UNMAPPED_CANDIDATES',
+      'NEEDS_INPUT',
+    ].includes(error.code)
+  )
+    return {
+      title: 'A little input is needed.',
+      body: ['NO_MAPPED_OPTIONS', 'MAPPING_REQUIRED', 'UNMAPPED_CANDIDATES'].includes(error.code)
+        ? 'This approved inventory has no eligible reviewed Qloo mappings for the request. The owner can review its scope. No substitute catalog has been used.'
+        : 'This connection needs active, approved references before it can make this choice. Ask the owner to review its context and permission.',
     };
   return {
     title: 'We couldn’t complete this choice.',
@@ -240,9 +297,19 @@ function formFields() {
       )
       .join(
         '',
-      )}</select><p class="field-help">A preference within the permitted catalog.</p></div><div class="field occasion-field"><span class="field-label">The occasion</span><p class="occasion">A thoughtful gift <span aria-hidden="true">✳</span></p><p class="field-help">Mira’s private references stay with Mira.</p></div>`;
+      )}</select><p class="field-help">A preference within the permitted catalog.</p></div><div class="field occasion-field"><label for="occasion">The occasion</label><select id="occasion" name="occasion">${[
+      ['just_because', 'Just because'],
+      ['birthday', 'A birthday'],
+      ['thank_you', 'A thank you'],
+      ['for_me', 'A book for me'],
+    ]
+      .map(
+        ([value, label]) =>
+          `<option value="${value}" ${state.brief.occasion === value ? 'selected' : ''}>${label}</option>`,
+      )
+      .join('')}</select><p class="field-help">Mira’s private references stay with Mira.</p></div>`;
   if (clientId === 'media')
-    return `<div class="field"><label for="max-minutes">Time for a film</label><select id="max-minutes" name="maxMinutes">${[90, 120, 150, 180, 240].map((minutes) => `<option value="${minutes}" ${state.constraints.maxMinutes === minutes ? 'selected' : ''}>Up to ${minutes} minutes</option>`).join('')}</select><p class="field-help">Runtime comes from public sample catalog facts.</p></div><div class="field"><span class="field-label">The mood</span><p class="occasion">Your permitted taste space <span aria-hidden="true">✦</span></p><p class="field-help">The gateway makes the choice within its scope.</p></div><div class="field availability-field"><span class="field-label">The important detail</span><p class="availability-copy">Bring your own screen.</p><p class="field-help">Streaming service availability is not verified.</p></div>`;
+    return `<div class="field"><label for="max-minutes">Time for a film</label><select id="max-minutes" name="maxMinutes">${[90, 120, 150, 180, 240].map((minutes) => `<option value="${minutes}" ${state.constraints.maxMinutes === minutes ? 'selected' : ''}>Up to ${minutes} minutes</option>`).join('')}</select><p class="field-help">Runtime comes from public catalog facts.</p></div><div class="field"><span class="field-label">The mood</span><p class="occasion">Your permitted taste space <span aria-hidden="true">✦</span></p><p class="field-help">The gateway makes the choice within its scope.</p></div><div class="field availability-field"><span class="field-label">The important detail</span><p class="availability-copy">Bring your own screen.</p><p class="field-help">Streaming service availability is not verified.</p></div>`;
   return `<div class="field"><label for="max-price">Illustrative spend <span>USD</span></label><div class="money-input"><span aria-hidden="true">$</span><input id="max-price" name="maxPrice" type="number" min="0" max="1000" step="1" inputmode="decimal" value="${state.constraints.maxPrice / 100}" required aria-describedby="budget-help"></div><p id="budget-help" class="field-help">Sample amounts, not admission or booking prices.</p></div><div class="field"><label for="setting">Where sounds good?</label><select id="setting" name="setting">${[
     ['any', 'Indoors or outdoors'],
     ['indoors', 'Somewhere indoors'],
@@ -254,17 +321,35 @@ function formFields() {
     )
     .join(
       '',
-    )}</select><p class="field-help">An outing within the London sample collection.</p></div><div class="field"><span class="field-label">A little breathing room</span><p class="occasion">London <span aria-hidden="true">↗</span></p><p class="field-help">Check opening times and accessibility with the source.</p></div>`;
+    )}</select><p class="field-help">An outing within the approved London collection.</p></div><div class="field"><span class="field-label">A little breathing room</span><p class="occasion">London <span aria-hidden="true">↗</span></p><p class="field-help">Check opening times and accessibility with the source.</p></div>`;
+}
+
+function noteField() {
+  return `<div class="brief-note field"><label for="brief-note">${clientId === 'books' ? 'A little more about the gift' : clientId === 'media' ? 'What kind of evening?' : 'What would make it a good afternoon?'} <span>Optional</span></label><textarea id="brief-note" name="note" rows="2" maxlength="240" placeholder="${clientId === 'books' ? 'Something they can dip into on a quiet Sunday…' : clientId === 'media' ? 'Something unhurried, with room to think…' : 'A gentle wander, with a place to sit for a while…'}" aria-describedby="brief-note-help">${esc(state.brief.note)}</textarea><p id="brief-note-help" class="field-help">This note accompanies your brief. It cannot add private references or expand the approved connection. 240 characters maximum.</p></div>`;
+}
+
+function providerStrip() {
+  const capabilities = execution();
+  if (!capabilities) return '';
+  return `<div class="execution-strip"><span><i class="${capabilities.qlooAvailable ? 'is-live' : ''}" aria-hidden="true"></i>${esc(capabilities.qlooAvailable ? capabilities.providerLabel || 'Qloo live available' : 'Live Qloo unavailable')}</span><span>${esc(capabilities.agentAvailable ? capabilities.agentLabel || 'AI explanation available' : 'Public facts & permission receipts')}</span><button class="text-button" type="button" data-action="about-execution">How this choice works <span aria-hidden="true">↗</span></button></div>`;
 }
 
 function connectionStrip() {
   const grant = state.view.grant;
-  return `<div class="connection-strip"><span class="connection-state"><span class="status-dot" aria-hidden="true"></span>${state.blocked ? 'Access needs attention' : 'Connected with permission'}</span><span class="connection-meta">${esc(grant.purpose === 'gift' ? 'Private gift connection' : 'Personal connection')} · until ${esc(dateTime(grant.expiresAt))}</span><button class="text-button" type="button" data-action="reconnect">Retry connection <span aria-hidden="true">↻</span></button></div>`;
+  return `<div class="connection-strip ${state.blocked ? 'is-blocked' : ''}"><span class="connection-state"><span class="status-dot" aria-hidden="true"></span>${state.blocked ? (state.blocked.code === 'GRANT_REVOKED' ? 'Access ended' : 'Access needs attention') : 'Connected with permission'}</span><span class="connection-meta">${esc(grant.purpose === 'gift' ? 'Private gift connection' : 'Personal connection')} · until ${esc(dateTime(grant.expiresAt))}</span><button class="text-button" type="button" data-action="reconnect">Retry connection <span aria-hidden="true">↻</span></button></div>`;
 }
 
 function issuePanel(error) {
   const copy = errorCopy(error);
-  return `<section class="inline-error" role="alert"><span class="error-symbol" aria-hidden="true">!</span><div><h3>${esc(copy.title)}</h3><p>${esc(copy.body)}</p><div class="button-row"><button type="button" class="button secondary" data-action="retry-choice">Try again</button>${state.lastMode === 'qloo' ? '<button type="button" class="button primary" data-action="use-sample">Use authored sample</button>' : ''}</div><p class="error-code">${esc(error.code)}</p></div></section>`;
+  const needsOwner = [
+    'SIGNAL_SELECTION_REQUIRED',
+    'NO_ACTIVE_SIGNALS',
+    'NO_MAPPED_OPTIONS',
+    'MAPPING_REQUIRED',
+    'UNMAPPED_CANDIDATES',
+    'NEEDS_INPUT',
+  ].includes(error.code);
+  return `<section class="inline-error" role="alert"><span class="error-symbol" aria-hidden="true">!</span><div><h3>${esc(copy.title)}</h3><p>${esc(copy.body)}</p><div class="button-row"><button type="button" class="button secondary" data-action="retry-choice">Try again</button>${needsOwner ? `<a class="button primary" href="${esc(ownerLink('/connections?client=' + clientId))}">Review in TASTEKEEPER <span aria-hidden="true">↗</span></a>` : state.lastMode === 'qloo' ? '<button type="button" class="button primary" data-action="use-sample">Use authored sample</button>' : ''}</div><p class="error-code">${esc(error.code)}</p></div></section>`;
 }
 
 function renderWorkspace() {
@@ -273,15 +358,33 @@ function renderWorkspace() {
     return;
   }
   document.querySelector('.demo-notice p').innerHTML =
-    `<strong>Isolated role-play demo.</strong> ${state.view.grant.purpose === 'gift' ? `Mira is the example recipient; ${esc(state.view.delegate.displayName)} is the example giver.` : `You’re trying Mira’s personal example workspace as ${esc(state.view.delegate.displayName)}.`} Claiming an invitation does not verify a real identity. Recommendations and budgets in sample mode are authored examples.`;
+    `<strong>Isolated role-play demo.</strong> ${state.view.grant.purpose === 'gift' ? `Mira is the example recipient; ${esc(state.view.delegate.displayName)} is the example giver.` : `You’re trying Mira’s personal example workspace as ${esc(state.view.delegate.displayName)}.`} Claiming an invitation does not verify a real identity. Provider results are labeled. Catalog amounts remain illustrative in every mode.`;
   if (state.blocked) {
     const copy = errorCopy(state.blocked);
     workspace.innerHTML = `${connectionStrip()}<section class="message-panel blocked-panel" role="alert"><div class="panel-index" aria-hidden="true">!</div><div><p class="eyebrow">CONNECTION UPDATE</p><h2>${esc(copy.title)}</h2><p>${esc(copy.body)}</p><div class="button-row"><button type="button" class="button primary" data-action="reconnect">Retry connection</button><a class="button secondary" href="${esc(ownerLink('/connections?client=' + clientId))}">Review in TASTEKEEPER <span aria-hidden="true">↗</span></a></div><p class="error-code">${esc(state.blocked.code)}</p></div></section>`;
     workspace.setAttribute('aria-busy', 'false');
     return;
   }
-  workspace.setAttribute('aria-busy', String(state.waiting || state.working));
-  workspace.innerHTML = `${connectionStrip()}<section class="brief-section" aria-labelledby="brief-title"><div class="section-heading"><div><p class="eyebrow">${clientId === 'media' ? 'BEFORE YOU PRESS PLAY' : 'LET’S BEGIN WITH THE BRIEF'}</p><h2 id="brief-title">${wording.heading}</h2></div><button type="button" class="text-button scope-link" data-action="scope">What can this app see? <span aria-hidden="true">↗</span></button></div><form id="brief-form"><fieldset class="brief-fields" ${state.waiting || state.working ? 'disabled' : ''}><legend class="sr-only">Your ${esc(wording.noun)} brief</legend>${formFields()}</fieldset><div class="form-bottom"><fieldset class="mode-fieldset" ${state.waiting || state.working ? 'disabled' : ''}><legend>Recommendation mode</legend><div class="mode-options"><button type="button" class="mode-choice ${state.mode === 'sample' ? 'is-active' : ''}" aria-pressed="${state.mode === 'sample'}" data-mode="sample"><span class="mode-radio" aria-hidden="true"></span>Authored sample</button><button type="button" class="mode-choice ${state.mode === 'qloo' ? 'is-active' : ''}" aria-pressed="${state.mode === 'qloo'}" data-mode="qloo"><span class="mode-radio" aria-hidden="true"></span>Qloo live <span class="unavailable-label">Unavailable</span></button></div></fieldset><button class="button primary submit-brief" type="submit" ${state.waiting || state.working ? 'disabled' : ''}>${state.waiting || state.working ? 'Checking your choice…' : state.mode === 'qloo' ? 'Check Qloo live' : wording.submit}<span aria-hidden="true">${clientId === 'media' ? '▶' : '→'}</span></button></div><p class="mode-disclosure">${state.mode === 'qloo' ? 'No Qloo key is configured. A live request will return an unavailable response; your brief is preserved.' : 'Authored sample order from TASTEKEEPER. These results are not Qloo recommendations. No individual preference or purchase likelihood has been measured.'}</p></form></section>${state.issue ? issuePanel(state.issue) : ''}<div id="choice-output" aria-live="polite"></div><div id="saved-output"></div><p class="catalog-notice"><span aria-hidden="true">↗</span><span>${esc(state.view.catalog.availabilityNotice)} <button type="button" class="text-button" data-action="catalog">View sample catalog facts</button></span></p>`;
+  const busy = state.waiting || state.working;
+  workspace.setAttribute('aria-busy', String(busy));
+  workspace.innerHTML = `${connectionStrip()}${providerStrip()}
+    <section class="brief-section" aria-labelledby="brief-title">
+      <div class="section-heading"><div><p class="eyebrow">${clientId === 'media' ? 'BEFORE YOU PRESS PLAY' : 'LET’S BEGIN WITH THE BRIEF'}</p><h2 id="brief-title">${wording.heading}</h2></div><button type="button" class="text-button scope-link" data-action="scope">What can this app see? <span aria-hidden="true">↗</span></button></div>
+      <form id="brief-form">
+        <fieldset class="brief-fields" ${busy ? 'disabled' : ''}><legend class="sr-only">Your ${esc(wording.noun)} brief</legend>${formFields()}${noteField()}</fieldset>
+        <div class="form-bottom">
+          <fieldset class="mode-fieldset" ${busy ? 'disabled' : ''}><legend>Recommendation mode</legend><div class="mode-options">
+            <button type="button" class="mode-choice ${state.mode === 'sample' ? 'is-active' : ''}" aria-pressed="${state.mode === 'sample'}" data-mode="sample"><span class="mode-radio" aria-hidden="true"></span>Authored sample</button>
+            <button type="button" class="mode-choice ${state.mode === 'qloo' ? 'is-active' : ''}" aria-pressed="${state.mode === 'qloo'}" data-mode="qloo"><span class="mode-radio" aria-hidden="true"></span>Qloo live ${liveAvailable() === false ? '<span class="unavailable-label">Unavailable</span>' : liveAvailable() ? '<span class="available-label">Live</span>' : ''}</button>
+          </div></fieldset>
+          <button class="button primary submit-brief" type="submit" ${busy ? 'disabled' : ''}>${busy ? 'Checking your choice…' : wording.submit}<span aria-hidden="true">${clientId === 'media' ? '▶' : '→'}</span></button>
+        </div>
+        <p class="mode-disclosure">${esc(modeDescription())}</p>
+      </form>
+    </section>
+    ${state.issue ? issuePanel(state.issue) : ''}
+    <div id="choice-output" aria-live="polite"></div><div id="saved-output"></div>
+    <p class="catalog-notice"><span aria-hidden="true">↗</span><span>${esc(state.view.catalog.availabilityNotice)} <button type="button" class="text-button" data-action="catalog">View public inventory facts</button></span></p>`;
   renderOutput();
   renderSaved();
 }
@@ -318,10 +421,31 @@ function renderOutput() {
   const result = state.result;
   const provenance = result.provenance;
   if (!result.items.length) {
-    output.innerHTML = `<section class="message-panel empty-choice"><div><p class="eyebrow">NO ELIGIBLE CHOICE</p><h2>A little more room might help.</h2><p>No permitted ${esc(wording.plural)} matched this brief in the sample catalog. You can adjust your constraints or review the connection with its owner.</p><p class="fine-print">${esc(provenance.label)} · ${provenance.candidateCount} catalog options considered.</p><button type="button" class="button secondary" data-action="edit-brief">Adjust the brief</button></div></section>`;
+    output.innerHTML = `<section class="message-panel empty-choice"><div><p class="eyebrow">${provenance.status === 'needs_input' ? 'INPUT NEEDED' : 'NO ELIGIBLE CHOICE'}</p><h2>${provenance.status === 'needs_input' ? 'A little input is needed.' : 'A little more room might help.'}</h2><p>No permitted ${esc(wording.plural)} matched this brief in the approved inventory. You can adjust your constraints or review the connection with its owner.</p><p class="fine-print">${esc(provenance.label)} · ${provenance.candidateCount} catalog options considered.</p>${mappingSummary(provenance)}${providerCoverage(provenance, result.items.length)}${explanationWarning(provenance)}<button type="button" class="button secondary" data-action="edit-brief">Adjust the brief</button></div></section>`;
     return;
   }
-  output.innerHTML = `<section class="results-section" aria-labelledby="results-title"><div class="section-heading"><div><p class="eyebrow">${provenance.mode === 'authored_sample' ? 'AN AUTHORED SAMPLE CHOICE' : 'A PERMITTED QLOO CHOICE'}</p><h2 id="results-title">${wording.lead}</h2></div><button type="button" class="text-button" data-action="receipt">View choice receipt <span aria-hidden="true">↗</span></button></div><div class="provenance-line"><span class="provenance-label">${provenance.mode === 'authored_sample' ? 'Authored sample' : 'Qloo result'}</span><p>${esc(provenance.label)}</p></div>${result.stale ? '<p class="result-warning">Based on an earlier context. Review the connection and make a new choice.</p>' : ''}${provenance.status === 'partial' || provenance.status === 'degraded' ? '<p class="result-warning">Some explanation details are unavailable. Only the returned public facts are shown.</p>' : ''}<div class="result-grid">${result.items.map((item, index) => resultCard(item, index)).join('')}</div><p class="result-footnote">${provenance.candidateCount} sample catalog options considered · Released with permission ${esc(dateTime(result.receipt.authorizedAt))}. ${provenance.mode === 'authored_sample' ? 'This order was authored for the demo.' : 'Cultural affinity is not an individual certainty.'}</p></section>`;
+  output.innerHTML = `<section class="results-section" aria-labelledby="results-title"><div class="section-heading"><div><p class="eyebrow">${provenance.mode === 'authored_sample' ? 'AN AUTHORED SAMPLE CHOICE' : 'A PERMITTED QLOO CHOICE'}</p><h2 id="results-title">${wording.lead}</h2></div><button type="button" class="text-button" data-action="receipt">View choice receipt <span aria-hidden="true">↗</span></button></div><div class="provenance-line"><span class="provenance-label">${provenance.mode === 'authored_sample' ? 'Authored sample' : 'Qloo live result'}</span><p>${esc(provenance.label)}</p>${provenance.agent?.enabled ? `<span class="agent-label">${esc(provenance.agent.label || 'AI explanation')} · ${esc(provenance.agent.status || 'status not reported')}</span>` : ''}</div>${mappingSummary(provenance)}${providerCoverage(provenance, result.items.length)}${result.stale ? '<p class="result-warning">Based on an earlier context. Review the connection and make a new choice.</p>' : ''}${explanationWarning(provenance)}<div class="result-grid">${result.items.map((item, index) => resultCard(item, index)).join('')}</div><p class="result-footnote">${provenance.candidateCount} approved inventory options considered · Released with permission ${esc(dateTime(result.receipt.authorizedAt))}. ${provenance.mode === 'authored_sample' ? 'This order was authored for the demo.' : 'Cultural affinity is not an individual certainty.'}</p></section>`;
+}
+
+function mappingSummary(provenance) {
+  if (provenance.mode !== 'qloo' || provenance.mappedCount === undefined) return '';
+  return `<p class="mapping-summary">${Number(provenance.mappedCount)} reviewed Qloo mappings${provenance.unmappedCount ? ` · ${Number(provenance.unmappedCount)} unmapped inventory option${provenance.unmappedCount === 1 ? '' : 's'} omitted` : ''}. The approved catalog was not expanded.</p>`;
+}
+
+function providerCoverage(provenance, shownCount) {
+  if (
+    provenance.mode !== 'qloo' ||
+    provenance.returnedCount === undefined ||
+    provenance.mappedCount === undefined
+  )
+    return '';
+  const incomplete = provenance.returnedCount < provenance.mappedCount;
+  return `<p class="${incomplete ? 'result-warning' : 'mapping-summary'} provider-coverage">Qloo returned ${Number(provenance.returnedCount)} of ${Number(provenance.mappedCount)} eligible approved options. Showing ${Number(shownCount)}.${incomplete ? ' Unreturned options were not filled in.' : ''}</p>`;
+}
+
+function explanationWarning(provenance) {
+  if (!provenance.agent?.enabled || provenance.agent.status === 'complete') return '';
+  return '<p class="result-warning explanation-warning">Some AI explanation details are unavailable. The returned choices retain their provider evidence.</p>';
 }
 
 function artwork(item, index) {
@@ -372,7 +496,8 @@ function resultCard(item, index) {
           : 'Runtime not supplied'
         : facts?.setting;
   const handoffUrl = clientId === 'places' ? directionsUrl(item, facts) : safeUrl(item.url);
-  return `<article class="result-card ${index === 0 ? 'leading-card' : ''}">${artwork(item, index)}<div class="card-content"><p class="card-kicker">${index === 0 ? 'THE FIRST CHOICE' : `ANOTHER POSSIBILITY · ${String(index + 1).padStart(2, '0')}`}</p><h3>${esc(item.title)}</h3><p class="card-creator">${esc(item.creator)}</p><p class="card-description">${esc(item.description)}</p><div class="card-facts"><span>${esc(detail || 'Public sample facts')}</span><span>${money(item.price)} <span class="sample-price">sample</span></span></div><button type="button" class="source-facts text-button" data-action="source" data-item="${esc(item.id)}">View source facts <span aria-hidden="true">↗</span></button><div class="card-actions"><button type="button" class="button primary keep-choice" data-action="save" data-item="${esc(item.id)}" ${saved ? 'disabled' : ''}>${saved ? '✓ Choice kept' : 'Keep this choice'}</button><a class="button secondary source-link" href="${esc(handoffUrl)}" target="_blank" rel="noopener noreferrer">${wording.source} <span aria-hidden="true">↗</span></a></div></div></article>`;
+  const explanation = state.result.explanations?.find((entry) => entry.itemId === item.id)?.text;
+  return `<article class="result-card ${index === 0 ? 'leading-card' : ''}">${artwork(item, index)}<span class="art-caption">Illustrative artwork</span><div class="card-content"><p class="card-kicker">${index === 0 ? 'THE FIRST CHOICE' : `ANOTHER POSSIBILITY · ${String(index + 1).padStart(2, '0')}`}</p><h3>${esc(item.title)}</h3><p class="card-creator">${esc(item.creator)}</p><p class="card-description">${esc(item.description)}</p>${explanation ? `<div class="choice-explanation"><span>WHY THIS POSSIBILITY</span><p>${esc(explanation)}</p><small>${esc(state.result.provenance.agent?.label || 'AI explanation')} · an interpretation of the permitted result</small></div>` : ''}<div class="card-facts"><span>${esc(detail || 'Public catalog facts')}</span><span>${money(item.price)} <span class="sample-price">illustrative</span></span></div><button type="button" class="source-facts text-button" data-action="source" data-item="${esc(item.id)}">View source facts <span aria-hidden="true">↗</span></button><div class="card-actions"><button type="button" class="button primary keep-choice" data-action="save" data-item="${esc(item.id)}" ${saved ? 'disabled' : ''}>${saved ? '✓ Choice kept' : 'Keep this choice'}</button><a class="button secondary source-link" href="${esc(handoffUrl)}" target="_blank" rel="noopener noreferrer">${wording.source} <span aria-hidden="true">↗</span></a></div></div></article>`;
 }
 
 function renderSaved() {
@@ -402,7 +527,14 @@ function scopeDrawer() {
 
 function aboutDrawer() {
   showDrawer(
-    '<h2 id="drawer-title">A reference app with a boundary.</h2><p class="drawer-intro">The Reading Room, Tonight, and A Good Afternoon are independent reference applications built by the TASTEKEEPER team. They are working examples, not claimed partnerships.</p><div class="drawer-callout"><h3>Authored sample mode</h3><p>The gateway returns an explicitly authored sample order. It is not a live Qloo result, a measured personal prediction, or verified stock, screening, booking, or opening-hour information.</p></div><p>Each app runs its own backend, has separate credentials, and keeps its session separate. Browsers send their brief to that app. Only the gateway can read taste spaces and authorize results.</p><p>The owner chooses the context, purpose, catalog, fields, allowance, and end time. A later request is checked again. This demo role-play does not establish a real identity.</p>',
+    '<h2 id="drawer-title">A reference app with a boundary.</h2><p class="drawer-intro">The Reading Room, Tonight, and A Good Afternoon are independent reference applications built by the TASTEKEEPER team. They are working examples, not claimed partnerships.</p><div class="drawer-callout"><h3>Every mode says where it came from.</h3><p>Live Qloo mode uses reviewed cultural mappings in the permitted catalog. Authored sample mode returns a deliberately authored order. Available AI explanations are labeled separately. None establishes individual certainty or verifies current price, stock, screening, booking, or opening hours.</p></div><p>Each app runs its own backend, has separate credentials, and keeps its session separate. Browsers send their brief to that app. Only the gateway can read taste spaces and authorize results.</p><p>The owner chooses the context, purpose, catalog, fields, allowance, and end time. A later request is checked again. This demo role-play does not establish a real identity. Display artwork is illustrative.</p>',
+  );
+}
+
+function executionDrawer() {
+  const capabilities = execution();
+  showDrawer(
+    `<h2 id="drawer-title">A choice, with its sources.</h2><p class="drawer-intro">Three different responsibilities, kept visible.</p><div class="execution-detail"><span>01 / PERMISSION</span><h3>TASTEKEEPER gateway</h3><p>Checks the client, context, purpose, catalog, fields, expiry, allowance, and current revisions before release.</p></div><div class="execution-detail"><span>02 / RECOMMENDATION</span><h3>${esc(capabilities?.providerLabel || 'Qloo cultural affinity')}</h3><p>${capabilities?.qlooAvailable ? 'The server reports live Qloo is available. It ranks reviewed matches from this inventory; it does not guarantee an individual preference.' : 'Live availability is reported by the server. An unavailable live request can be retried. Authored sample mode is always an explicit choice.'}</p></div><div class="execution-detail"><span>03 / EXPLANATION</span><h3>${esc(capabilities?.agentAvailable ? capabilities.agentLabel || 'AI explanation' : 'Public facts & receipts')}</h3><p>${capabilities?.agentAvailable ? 'Permitted public explanations help describe a choice. An agent cannot expand this connection, invent new inventory, or bypass the release check.' : 'No AI explanation is reported as available for this connection. Public catalog descriptions remain separate from recommendation evidence.'}</p></div>`,
   );
 }
 
@@ -413,7 +545,7 @@ function receiptDrawer() {
   }
   const result = state.result;
   showDrawer(
-    `<h2 id="drawer-title">The receipt for this choice.</h2><p class="drawer-intro">A public record of the permission used when this result was released. Private taste references are not part of this client’s receipt.</p><span class="drawer-mode">${result.provenance.mode === 'authored_sample' ? 'AUTHORED SAMPLE · NO QLOO CALL' : 'QLOO RESULT'}</span><p>${esc(result.provenance.label)}</p><dl class="evidence-facts"><div><dt>Receipt</dt><dd class="mono">${esc(result.receipt.id)}</dd></div><div><dt>Decision</dt><dd class="mono">${esc(result.id)}</dd></div><div><dt>Authorized release</dt><dd>${esc(dateTime(result.receipt.authorizedAt))}</dd></div><div><dt>Grant version</dt><dd>${result.receipt.grantVersion}</dd></div><div><dt>Context revision</dt><dd>${result.receipt.contextRevision}</dd></div><div><dt>Catalog options considered</dt><dd>${result.provenance.candidateCount}</dd></div><div><dt>Choices returned</dt><dd>${result.provenance.selectedCount}</dd></div><div><dt>Released fields</dt><dd>${result.receipt.fields.map(esc).join(', ')}</dd></div><div><dt>Evidence status</dt><dd>${esc(result.provenance.status)}</dd></div></dl><p>The app displays the gateway’s returned order without ranking it again. Sample prices are illustrative. No current availability is verified.</p>`,
+    `<h2 id="drawer-title">The receipt for this choice.</h2><p class="drawer-intro">A public record of the permission used when this result was released. Private taste references are not part of this client’s receipt.</p><span class="drawer-mode">${result.provenance.mode === 'authored_sample' ? 'AUTHORED SAMPLE · NO QLOO CALL' : 'QLOO LIVE RESULT'}</span><p>${esc(result.provenance.label)}</p>${mappingSummary(result.provenance)}${providerCoverage(result.provenance, result.items.length)}${explanationWarning(result.provenance)}<dl class="evidence-facts"><div><dt>Receipt</dt><dd class="mono">${esc(result.receipt.id)}</dd></div><div><dt>Decision</dt><dd class="mono">${esc(result.id)}</dd></div><div><dt>Authorized release</dt><dd>${esc(dateTime(result.receipt.authorizedAt))}</dd></div><div><dt>Grant version</dt><dd>${result.receipt.grantVersion}</dd></div><div><dt>Context revision</dt><dd>${result.receipt.contextRevision}</dd></div><div><dt>Catalog options considered</dt><dd>${result.provenance.candidateCount}</dd></div><div><dt>Choices shown</dt><dd>${result.items.length}</dd></div>${result.provenance.mode === 'qloo' && result.provenance.returnedCount !== undefined ? `<div><dt>Qloo options returned</dt><dd>${result.provenance.returnedCount}</dd></div>` : ''}${result.provenance.mode === 'qloo' && result.provenance.mappedCount !== undefined ? `<div><dt>Eligible approved Qloo options</dt><dd>${result.provenance.mappedCount}</dd></div>` : ''}<div><dt>Released fields</dt><dd>${result.receipt.fields.map(esc).join(', ')}</dd></div><div><dt>Evidence status</dt><dd>${esc(result.provenance.status)}</dd></div><div><dt>Explanation provider</dt><dd>${esc(result.provenance.agent?.label || 'No AI explanation reported')}</dd></div>${result.provenance.agent ? `<div><dt>Explanation status</dt><dd>${esc(result.provenance.agent.status || 'Not reported')}</dd></div>` : ''}</dl><p>This receipt records permission, not recommendation quality. The app displays the gateway’s returned order without ranking it again. Catalog amounts and artwork are illustrative. Check availability with the public source.</p>`,
   );
 }
 
@@ -422,7 +554,7 @@ function sourceDrawer(itemId) {
   const facts = state.view?.catalog.items.find((entry) => entry.id === itemId);
   if (!item || !facts) return;
   showDrawer(
-    `<h2 id="drawer-title">${esc(item.title)}</h2><p class="drawer-intro">${esc(item.creator)}</p><p>${esc(item.description)}</p><dl class="evidence-facts"><div><dt>Public item identifier</dt><dd class="mono">${esc(item.id)}</dd></div>${facts.identity ? `<div><dt>${clientId === 'places' ? 'Public address' : 'Public identity'}</dt><dd>${esc(facts.identity)}</dd></div>` : ''}${facts.format ? `<div><dt>Edition format</dt><dd>${esc(facts.format)}</dd></div>` : ''}${facts.minutes ? `<div><dt>Runtime</dt><dd>${facts.minutes} minutes</dd></div>` : ''}${facts.setting ? `<div><dt>Setting</dt><dd>${esc(facts.setting)}</dd></div>` : ''}<div><dt>Illustrative amount</dt><dd>${money(item.price)} USD · sample</dd></div><div><dt>Catalog source</dt><dd>${esc(state.view.catalog.source)}</dd></div><div><dt>Sample snapshot created</dt><dd>${esc(dateTime(state.view.catalog.retrievedAt))}</dd></div><div><dt>Public source</dt><dd>${esc(sourceName(item.url))}</dd></div></dl><div class="drawer-callout"><h3>Check with the source</h3><p>${esc(state.view.catalog.availabilityNotice)} These catalog facts do not verify current price or operational availability.</p></div><a class="button drawer-button" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer">${clientId === 'places' ? 'Open official venue page' : wording.source} <span aria-hidden="true">↗</span></a>${clientId === 'places' ? `<a class="button drawer-button" href="${esc(directionsUrl(item, facts))}" target="_blank" rel="noopener noreferrer">Search directions <span aria-hidden="true">↗</span></a>` : ''}`,
+    `<h2 id="drawer-title">${esc(item.title)}</h2><p class="drawer-intro">${esc(item.creator)}</p><p>${esc(item.description)}</p><dl class="evidence-facts"><div><dt>Public item identifier</dt><dd class="mono">${esc(item.id)}</dd></div>${facts.identity ? `<div><dt>${clientId === 'places' ? 'Public address' : 'Public identity'}</dt><dd>${esc(facts.identity)}</dd></div>` : ''}${facts.format ? `<div><dt>Edition format</dt><dd>${esc(facts.format)}</dd></div>` : ''}${facts.minutes ? `<div><dt>Runtime</dt><dd>${facts.minutes} minutes</dd></div>` : ''}${facts.setting ? `<div><dt>Setting</dt><dd>${esc(facts.setting)}</dd></div>` : ''}<div><dt>Illustrative amount</dt><dd>${money(item.price)} USD · illustrative</dd></div><div><dt>Catalog source</dt><dd>${esc(state.view.catalog.source)}</dd></div><div><dt>Inventory snapshot recorded</dt><dd>${esc(dateTime(state.view.catalog.retrievedAt))}</dd></div><div><dt>Public source</dt><dd>${esc(sourceName(item.url))}</dd></div></dl><div class="drawer-callout"><h3>Check with the source</h3><p>${esc(state.view.catalog.availabilityNotice)} These catalog facts do not verify current price or operational availability.</p></div><a class="button drawer-button" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer">${clientId === 'places' ? 'Open official venue page' : wording.source} <span aria-hidden="true">↗</span></a>${clientId === 'places' ? `<a class="button drawer-button" href="${esc(directionsUrl(item, facts))}" target="_blank" rel="noopener noreferrer">Search directions <span aria-hidden="true">↗</span></a>` : ''}`,
   );
 }
 
@@ -430,7 +562,7 @@ function catalogDrawer() {
   if (!state.view) return;
   const catalog = state.view.catalog;
   showDrawer(
-    `<h2 id="drawer-title">A small, named collection.</h2><p class="drawer-intro">${esc(catalog.availabilityNotice)}</p><dl class="evidence-facts"><div><dt>Catalog</dt><dd>${esc(catalog.id)}</dd></div><div><dt>Authorized snapshot</dt><dd class="mono">${esc(catalog.snapshotId)}</dd></div><div><dt>Source</dt><dd>${esc(catalog.source)}</dd></div><div><dt>Sample snapshot created</dt><dd>${esc(dateTime(catalog.retrievedAt))}</dd></div></dl><h3>Public catalog items</h3><ul class="catalog-list">${catalog.items.map((item) => `<li><a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer"><span>${esc(item.title)}</span><span aria-hidden="true">↗</span></a><small>${esc(item.creator)} · ${money(item.price)} sample</small></li>`).join('')}</ul><p>This app sends the approved candidate identifiers to TASTEKEEPER. It never creates or independently ranks substitute options.</p>`,
+    `<h2 id="drawer-title">A small, named collection.</h2><p class="drawer-intro">${esc(catalog.availabilityNotice)}</p><dl class="evidence-facts"><div><dt>Catalog</dt><dd>${esc(catalog.id)}</dd></div><div><dt>Authorized snapshot</dt><dd class="mono">${esc(catalog.snapshotId)}</dd></div><div><dt>Source</dt><dd>${esc(catalog.source)}</dd></div><div><dt>Inventory snapshot recorded</dt><dd>${esc(dateTime(catalog.retrievedAt))}</dd></div></dl><h3>Public catalog items</h3><ul class="catalog-list">${catalog.items.map((item) => `<li><a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener noreferrer"><span>${esc(item.title)}</span><span aria-hidden="true">↗</span></a><small>${esc(item.creator)} · ${money(item.price)} illustrative</small></li>`).join('')}</ul><p>This app sends the approved candidate identifiers to TASTEKEEPER. It never creates or independently ranks substitute options.</p>`,
   );
 }
 
@@ -471,30 +603,39 @@ function readBrief() {
   if (data.has('format')) state.constraints.format = String(data.get('format'));
   if (data.has('maxMinutes')) state.constraints.maxMinutes = Number(data.get('maxMinutes'));
   if (data.has('setting')) state.constraints.setting = String(data.get('setting'));
+  if (data.has('occasion')) state.brief.occasion = String(data.get('occasion'));
+  if (data.has('note')) state.brief.note = String(data.get('note')).trim().slice(0, 240);
   return true;
 }
 
 async function startChoice(mode = state.mode) {
   if (state.waiting || state.working || !state.view || state.blocked || !readBrief()) return;
-  state.generation += 1;
+  const generation = ++state.generation;
   state.mode = mode;
+  state.modeChosen = true;
   state.lastMode = mode;
   state.working = true;
   state.issue = null;
   state.result = null;
+  state.runId = null;
   state.paused = false;
   renderWorkspace();
   try {
     const request = await api('/api/decisions', {
       hardConstraints: state.constraints,
       mode,
+      brief: {
+        occasion: state.brief.occasion,
+        ...(state.brief.note ? { note: state.brief.note } : {}),
+      },
       idempotencyKey: crypto.randomUUID(),
     });
+    if (generation !== state.generation) return;
     state.runId = request.id;
     state.working = false;
     await pollChoice();
   } catch (error) {
-    fail(error);
+    if (generation === state.generation) fail(error);
   }
 }
 
@@ -514,11 +655,18 @@ async function pollChoice() {
         // Reload the allowance and persisted shortlist through the gateway, too.
         const current = await api('/api/session');
         if (generation !== state.generation) return;
-        state.view = current;
+        applySession(current);
         state.result = result;
         state.waiting = false;
         renderWorkspace();
         return;
+      }
+      if (['needs_input', 'failed', 'denied', 'cancelled', 'stale'].includes(result.state)) {
+        throw new ServiceError(
+          result.errorCode || (result.state === 'needs_input' ? 'NEEDS_INPUT' : 'REQUEST_FAILED'),
+          result.message ||
+            'The request could not release a choice. Review the brief or connection and retry.',
+        );
       }
       state.stage = result.state;
       renderOutput();
@@ -537,17 +685,21 @@ async function pollChoice() {
 }
 
 async function reconnect() {
-  state.generation += 1;
+  const generation = ++state.generation;
   state.waiting = false;
+  state.working = true;
+  renderWorkspace();
   try {
     const view = await api('/api/session');
-    state.view = view;
+    if (generation !== state.generation) return;
+    applySession(view);
+    state.working = false;
     state.blocked = null;
     state.issue = null;
     renderWorkspace();
     toast('Connection checked with TASTEKEEPER.');
   } catch (error) {
-    fail(error);
+    if (generation === state.generation) fail(error);
   }
 }
 
@@ -589,6 +741,7 @@ document.addEventListener('click', (event) => {
   const modeButton = event.target.closest('[data-mode]');
   if (modeButton && !modeButton.disabled && readBrief()) {
     state.mode = modeButton.dataset.mode;
+    state.modeChosen = true;
     renderWorkspace();
     document.querySelector(`[data-mode="${state.mode}"]`)?.focus();
     return;
@@ -598,6 +751,7 @@ document.addEventListener('click', (event) => {
   const action = button.dataset.action;
   if (action === 'reconnect') void reconnect();
   if (action === 'scope') scopeDrawer();
+  if (action === 'about-execution') executionDrawer();
   if (action === 'receipt') receiptDrawer();
   if (action === 'source') sourceDrawer(button.dataset.item);
   if (action === 'catalog') catalogDrawer();
@@ -647,11 +801,13 @@ async function boot() {
       view = await api('/api/claim', claim);
       claim.token = '';
     } else view = await api('/api/session');
-    state.view = view;
+    applySession(view);
     if (view.brief) {
       state.constraints = view.brief.hardConstraints;
       state.mode = view.brief.mode;
       state.lastMode = view.brief.mode;
+      state.modeChosen = true;
+      if (view.brief.brief) state.brief = { ...state.brief, ...view.brief.brief };
     }
     renderWorkspace();
     if (claiming) {

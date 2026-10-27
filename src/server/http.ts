@@ -4,6 +4,7 @@ import { digest, equalSecret } from './crypto.ts';
 import { clientIdSchema } from '../domain/contracts.ts';
 import { ownerFromToken, principalFromToken } from './store.ts';
 import { transaction } from './db.ts';
+import { principalFromBrowserSession } from './client-sessions.ts';
 export function json(value: unknown, status = 200) {
   return Response.json(value, {
     status,
@@ -92,6 +93,11 @@ export function authenticateClient(request: Request) {
 export async function requirePrincipal(request: Request) {
   const client = authenticateClient(request);
   const auth = request.headers.get('authorization');
+  const session = request.headers.get('x-client-session');
+  if (session) {
+    if (auth) throw denied('PRINCIPAL_DENIED');
+    return principalFromBrowserSession(client, session);
+  }
   if (!auth?.startsWith('Bearer ')) throw denied('TOKEN_EXPIRED', 401);
   return principalFromToken(client, auth.slice(7));
 }

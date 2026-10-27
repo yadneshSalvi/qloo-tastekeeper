@@ -7,7 +7,7 @@ const content = {
     eyebrow: 'A small bookshop. A thoughtful choice.',
     title: 'Some gifts say<br>“I know you.”',
     description:
-      'Find a book with a little more meaning. A private connection to TASTEKEEPER helps us choose from our sample shelf, while Mira’s references stay with her.',
+      'Find a book with a little more meaning. A permissioned connection to TASTEKEEPER helps us choose from a small, named shelf. Mira’s references stay out of your results.',
     promise: 'A choice with a reason.',
     number: 'No. 01',
     detail: 'BOOKS & GOOD INTENTIONS',
@@ -19,7 +19,7 @@ const content = {
     eyebrow: 'Fewer options. A better evening.',
     title: 'Your evening.<br>Opening scene.',
     description:
-      'One film to settle into, with two possibilities if the mood changes. Let your permitted taste space guide a choice from this sample film collection.',
+      'One film to settle into, with two possibilities if the mood changes. Let your permitted taste space guide a choice from a considered film collection.',
     promise: 'The credits can wait.',
     number: '02 / 03',
     detail: 'A FILM FOR THE MOMENT',
@@ -47,21 +47,27 @@ function escape(value: string) {
   );
 }
 
-export function renderPage(clientId: ClientId, ownerOrigin: string) {
+export type ClientAssetVersions = { script: string; stylesheet: string };
+
+export function renderPage(
+  clientId: ClientId,
+  ownerOrigin: string,
+  assetVersions: ClientAssetVersions,
+) {
   const page = content[clientId];
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="${clientId === 'media' ? 'dark' : 'light'}"><meta name="description" content="${escape(page.name)} — an independent TASTEKEEPER reference application with controlled access to taste."><title>${escape(page.name)} · TASTEKEEPER</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='8' fill='%232b4436'/%3E%3Ctext x='20' y='28' text-anchor='middle' font-size='26' fill='%23f6f3e9'%3Et%3C/text%3E%3C/svg%3E"><link rel="preload" href="/fonts/source-serif-4.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="/styles.css"><script src="/client.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="${clientId === 'media' ? 'dark' : 'light'}"><meta name="description" content="${escape(page.name)} — an independent TASTEKEEPER reference application with controlled access to taste."><title>${escape(page.name)} · TASTEKEEPER</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='8' fill='%232b4436'/%3E%3Ctext x='20' y='28' text-anchor='middle' font-size='26' fill='%23f6f3e9'%3Et%3C/text%3E%3C/svg%3E"><link rel="preload" href="/fonts/source-serif-4.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="/styles.css?v=${encodeURIComponent(assetVersions.stylesheet)}"><script src="/client.js?v=${encodeURIComponent(assetVersions.script)}" defer></script></head>
 <body data-client="${clientId}" data-owner-origin="${escape(ownerOrigin)}">
 <a class="skip-link" href="#client-workspace">Skip to your choice</a>
 <div class="site-wrap">
 <header class="site-header"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true">${page.monogram}</span><span>${page.name}</span></a><div class="header-right"><span class="reference-label">A TASTEKEEPER reference app</span><button class="text-button connection-button" id="connection-details" type="button">Your connection <span aria-hidden="true">↗</span></button><details class="site-menu"><summary aria-label="Open navigation menu"><span aria-hidden="true">☰</span></summary><nav aria-label="Client navigation"><a href="${escape(ownerOrigin)}/home">Return to TASTEKEEPER <span aria-hidden="true">↗</span></a><button type="button" id="about-client">How this works</button><button type="button" id="retry-connection">Retry connection</button></nav></details></div></header>
 <main><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow"><span class="small-line" aria-hidden="true"></span>${page.eyebrow}</p><h1 id="hero-title">${page.title}</h1><p class="hero-description">${page.description}</p><p class="hero-signoff">${page.promise}</p></div>${page.art}</section>
 <div class="chapter-line"><span>${page.detail}</span><span>${page.number}</span></div>
-<section class="demo-notice" aria-label="Demonstration disclosure"><span class="notice-icon" aria-hidden="true">i</span><p><strong>Isolated role-play demo.</strong> Mira is the example recipient; the invited giver chooses on her behalf. Claiming an invitation does not verify a real identity. Recommendations and budgets in sample mode are authored examples.</p></section>
+<section class="demo-notice" aria-label="Demonstration disclosure"><span class="notice-icon" aria-hidden="true">i</span><p><strong>Isolated role-play demo.</strong> Mira is the example recipient; the invited giver chooses on her behalf. Claiming an invitation does not verify a real identity. Live provider results and authored sample choices are labeled separately. Catalog amounts are illustrative in every mode.</p></section>
 <div id="client-workspace" tabindex="-1"><section class="connection-loading" aria-live="polite"><span class="loading-dot" aria-hidden="true"></span><p>Opening your connection…</p></section></div>
 <noscript><section class="message-panel"><h2>JavaScript connects this reference app.</h2><p>Enable JavaScript to claim an invitation and make a choice. Invitation tokens stay out of page addresses after the client opens.</p><a class="button primary" href="${escape(ownerOrigin)}/connections?client=${clientId}">Open TASTEKEEPER</a></section></noscript>
 </main>
-<footer class="site-footer"><div><a class="footer-owner" href="${escape(ownerOrigin)}/home"><span class="owner-symbol" aria-hidden="true">✳</span> Made possible by TASTEKEEPER <span aria-hidden="true">↗</span></a><p>Your references stay in your taste space. Suggestions may still reveal something about taste.</p></div><span class="footer-note">No purchase, booking, stock, or streaming availability is verified.</span></footer>
+<footer class="site-footer"><div><a class="footer-owner" href="${escape(ownerOrigin)}/home"><span class="owner-symbol" aria-hidden="true">✳</span> Made possible by TASTEKEEPER <span aria-hidden="true">↗</span></a><p>Selected references stay out of this app’s results. Suggestions may still reveal something about taste.</p></div><span class="footer-note">No purchase, booking, stock, or streaming availability is verified.</span></footer>
 </div>
 <dialog id="evidence-dialog" class="evidence-dialog" aria-labelledby="drawer-title"><div class="drawer-header"><span class="drawer-kicker">BEHIND THIS CHOICE</span><button class="icon-button close-drawer" type="button" aria-label="Close details">×</button></div><div id="drawer-content"></div></dialog>
 <div id="toast" class="toast" role="status" hidden></div>
