@@ -46,7 +46,7 @@ books_url="https://tastekeeper-books-$TASTEKEEPER_GCP_PROJECT_NUMBER.$TASTEKEEPE
 media_url="https://tastekeeper-media-$TASTEKEEPER_GCP_PROJECT_NUMBER.$TASTEKEEPER_REGION.run.app"
 places_url="https://tastekeeper-places-$TASTEKEEPER_GCP_PROJECT_NUMBER.$TASTEKEEPER_REGION.run.app"
 "$gc" run deploy tastekeeper-web "${common[@]}" "${private_network[@]}" \
-  --service-account="$web_sa" --memory=512Mi --min=1 --max=2 --max-instances=2 --concurrency=20 --timeout=60 \
+  --service-account="$web_sa" --memory=512Mi --min=0 --max=2 --max-instances=2 --concurrency=20 --timeout=60 \
   --startup-probe=tcpSocket.port=8080,timeoutSeconds=1,periodSeconds=10,failureThreshold=24 \
   --no-invoker-iam-check --command=node --args=node_modules/next/dist/bin/next,start,--hostname,0.0.0.0 \
   --set-secrets="$db_secrets,CLIENT_BOOKS_SECRET=tastekeeper-books-client-secret:$TASTEKEEPER_BOOKS_CLIENT_SECRET_VERSION,CLIENT_MEDIA_SECRET=tastekeeper-media-client-secret:$TASTEKEEPER_MEDIA_CLIENT_SECRET_VERSION,CLIENT_PLACES_SECRET=tastekeeper-places-client-secret:$TASTEKEEPER_PLACES_CLIENT_SECRET_VERSION" \
